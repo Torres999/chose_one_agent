@@ -1,0 +1,1150 @@
+# -*- coding: utf-8 -*-
+import logging
+import time
+import datetime
+import os
+from typing import List, Dict, Any, Tuple
+import re
+
+from chose_one_agent.scrapers.base_scraper import BaseScraper
+from chose_one_agent.utils.helpers import parse_datetime, is_before_cutoff, extract_date_time, is_in_date_range
+from chose_one_agent.analyzers.sentiment_analyzer import SentimentAnalyzer
+
+# 配置日志
+logger = logging.getLogger(__name__)
+
+
+class TelegraphScraper(BaseScraper):
+    """
+    财经网站的电报爬虫类，用于抓取和分析电报内容
+    """
+
+    def __init__(self, cutoff_date, headless=True, debug=False, section="看盘"):
+        """
+        初始化电报爬虫
+
+        Args:
+            cutoff_date: 截止日期，爬虫只会获取该日期到当前时间范围内的电报，早于或晚于此范围的电报将被忽略
+            headless: 是否使用无头模式运行浏览器
+            debug: 是否启用调试模式
+            section: 默认抓取的板块，如"看盘"或"公司"
+        """
+        super().__init__(cutoff_date, headless)
+        self.sentiment_analyzer = SentimentAnalyzer()
+        self.debug = debug
+        self.section = section
+        # 创建调试目录
+        os.makedirs("debug", exist_ok=True)         """
+        初始化电报爬虫
+
+        Args:
+            cutoff_date: 截止日期，爬虫只会获取该日期到当前时间范围内的电报，早于或晚于此范围的电报将被忽略
+            headless: 是否使用无头模式运行浏览器
+            debug: 是否启用调试模式
+            section: 默认抓取的板块，如"看盘"或"公司"
+        """
+        self.sentiment_analyzer = SentimentAnalyzer()
+        self.debug = debug
+        self.section = section
+        # 创建调试目录
+        os.makedirs("debug", exist_ok=True)
+
+    def extract_post_info(self, post_element) -> Dict[str, Any]:
+        """
+        从帖子元素中提取信息
+
+        Args:
+            post_element: 帖子的DOM元素
+
+        Returns:
+            包含帖子信息的字典
+        """
+        try:
+            # 获取元素的HTML和文本，用于调试
+            html = post_element.inner_html()
+            element_text = post_element.inner_text()
+            logger.debug(f"帖子元素HTML: {html}")
+
+            # 首先从文本内容中提取【】包围的标题，适合财联社电报格式
+            title = "无标题"
+            title_match = re.search(r'【(.*?)】', element_text)
+            if title_match:
+                title = title_match.group(1)
+                logger.debug(f"从内容中提取到的标题: {title}")
+            
+            # 如果上述方法没有提取到标题，尝试从DOM元素中查找
+            if title == "无标题":
+                # 根据财联社网站结构，查找标题
+                title_selectors = [
+                    "strong", "div strong", "span strong",  # 电报标题常常在strong标签中
+                    "a.title", "a.content", ".title", ".content",
+                    "span.title", "span.content", "div.title", "div.content"
+                ]
+
+                for selector in title_selectors:
+                    title_element = post_element.query_selector(selector)
+                    if title_element:
+                        title_text = title_element.inner_text().strip()
+                        # 从标题文本中提取【】内的内容作为真正的标题
+                        title_inner_match = re.search(r'【(.*?)】', title_text)
+                        if title_inner_match:
+                            title = title_inner_match.group(1)
+                        else:
+                            title = title_text
+                        
+                        logger.debug(f"使用选择器'{selector}'找到标题: {title}")
+                        break
+
+            logger.debug(f"提取的标题: {title}")
+
+            # 查找日期和时间 - 适配财联社网站的结构
+            date_str = ""
+            time_str = ""
+            
+            # 首先尝试从文本中直接提取时间格式 (HH:MM:SS)
+            time_match = re.search(r'(\d{2}:\d{2}:\d{2})', element_text)
+            if time_match:
+                time_str = time_match.group(1)
+                # 如果能找到时间，同时尝试找日期 (YYYY.MM.DD)
+                date_match = re.search(r'(\d{4}\.\d{2}\.\d{2})', element_text)
+                if date_match:
+                    date_raw = date_match.group(1)
+                    # 转换日期格式从 YYYY.MM.DD 到 YYYY-MM-DD
+                    date_str = date_raw.replace('.', '-')
+                else:
+                    # 如果找不到日期，使用当前日期
+                    date_str = datetime.datetime.now().strftime("%Y-%m-%d")
+                    
+                logger.debug(f"从文本中提取的日期: {date_str}, 时间: {time_str}")
+            
+            # 如果没有从文本提取到，尝试从DOM中查找
+            if not time_str:
+                time_selectors = [
+                    ".telegraph-time-box", ".time", "time",
+                    "[class*='time']", "span[class*='time']", "div[class*='time']"
+                ]
+
+                for selector in time_selectors:
+                    time_element = post_element.query_selector(selector)
+                    if time_element:
+                        logger.debug(f"找到时间元素，使用选择器: {selector}")
+                        date_time_text = time_element.inner_text().strip()
+                        date_str, time_str = extract_date_time(date_time_text)
+                        break
+
+            logger.debug(f"解析后的日期: {date_str}, 时间: {time_str}")
+
+            # 提取评论数 - 适配财联社网站的结构
+            comment_count = 0
+            comment_selectors = [
+                ".comment span", "span[class*='comment']", "a[href*='detail']", 
+                "[class*='comment']", ".comments-count"
+            ]
+
+            for selector in comment_selectors:
+                comment_elements = post_element.query_selector_all(selector)
+                if comment_elements and len(comment_elements) > 0:
+                    for element in comment_elements:
+                        comment_text = element.inner_text().strip()
+                        # 寻找包含数字的评论计数
+                        if re.search(r'\d+', comment_text):
+                            try:
+                                # 提取数字部分
+                                digit_match = re.search(r'\d+', comment_text)
+                                if digit_match:
+                                    comment_count = int(digit_match.group())
+                                    logger.debug(f"找到评论数: {comment_count}")
+                                    break
+                            except ValueError:
+                                continue
+                if comment_count > 0:
+                    break
+
+            logger.info(
+                f"提取的帖子信息: 标题='{title}', 日期='{date_str}', 时间='{time_str}', 评论数={comment_count}")
+
+            return {
+                "title": title,
+                "date": date_str,
+                "time": time_str,
+                "comment_count": comment_count,
+                "element": post_element
+            }
+        except Exception as e:
+            logger.error(f"提取帖子信息时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return {
+                "title": "错误",
+                "date": "",
+                "time": "",
+                "comment_count": 0,
+                "element": post_element
+            }
+
+    def get_comments(self, post_element) -> List[str]:
+        """
+        获取帖子的评论
+
+        Args:
+            post_element: 帖子的DOM元素
+
+        Returns:
+            评论内容列表
+        """
+        comments = []
+
+        # 检查元素是否为None
+        if post_element is None:
+            logger.warning("无法获取评论：帖子元素为None")
+            return comments
+
+        try:
+            # 根据截图中的结构，找到评论按钮并点击
+            comment_selectors = [
+                "span.comment", "div.comment", ".comment", "[class*='comment']",
+                "span[class*='comment']", "div[class*='comment']", ".comments-count"
+            ]
+
+            comment_btn = None
+            for selector in comment_selectors:
+                comment_btn = post_element.query_selector(selector)
+                if comment_btn:
+                    logger.debug(f"找到评论按钮，使用选择器: {selector}")
+                    break
+
+            if comment_btn:
+                # 点击评论按钮进入评论页面
+                comment_btn.click()
+                self.page.wait_for_load_state("networkidle")
+                time.sleep(2)
+
+                # 保存评论页面截图以便调试
+                self.page.screenshot(path="debug/comments_page.png")
+
+                # 根据截图中可能的评论区结构提取评论内容
+                comment_content_selectors = [
+                    ".comment-item", ".comment-content", ".comment-text",
+                    "[class*='comment-item']", "[class*='comment-content']",
+                    "[class*='comment-text']", ".comment-body", ".comment p"
+                ]
+
+                for selector in comment_content_selectors:
+                    comment_elements = self.page.query_selector_all(selector)
+                    if comment_elements and len(comment_elements) > 0:
+                        logger.info(
+                            f"找到{len(comment_elements)}个评论元素，使用选择器: {selector}")
+
+                        for element in comment_elements:
+                            comment_text = element.inner_text().strip()
+                            if comment_text:
+                                # 过滤掉可能的日期、用户名等信息
+                                if len(comment_text) > 2 and not re.match(r'^\d{1,2}:\d{2}$', comment_text):
+                                    comments.append(comment_text)
+                                    logger.debug(f"提取的评论: {comment_text}")
+
+                        if comments:
+                            break
+
+                # 返回到列表页面
+                self.page.go_back()
+                self.page.wait_for_load_state("networkidle")
+                time.sleep(1)
+            else:
+                logger.info("未找到评论按钮")
+        except Exception as e:
+            logger.error(f"获取评论时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+        logger.info(f"共获取到{len(comments)}条评论")
+        return comments
+
+    def analyze_post(self, post_info: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        分析帖子信息，提取评论并进行情感分析
+
+        Args:
+            post_info: 包含帖子信息的字典
+
+        Returns:
+            添加了情感分析结果的帖子信息字典
+        """
+        result = {
+            "title": post_info["title"],
+            "date": post_info["date"],
+            "time": post_info["time"],
+            "comment_count": post_info["comment_count"]
+        }
+
+        # 如果评论数为0或元素为None，只记录标题内容
+        if post_info["comment_count"] == 0 or post_info["element"] is None:
+            logger.info(
+                f"帖子 '{post_info['title']}' 评论数为{post_info['comment_count']}或没有关联元素，记录标题内容")
+            result["sentiment"] = "中性"  # 默认情感为中性
+            result["comments"] = []
+        else:
+            # 如果评论数不为0且有元素，获取评论并进行情感分析
+            logger.info(
+                f"帖子 '{post_info['title']}' 评论数为{post_info['comment_count']}，获取评论并进行情感分析")
+
+            try:
+                comments = self.get_comments(post_info["element"])
+
+                if comments:
+                    # 进行情感分析
+                    sentiment = self.sentiment_analyzer.analyze_comments(
+                        comments)
+                    logger.info(f"评论情感分析结果: {sentiment}")
+
+                    result["sentiment"] = sentiment
+                    result["comments"] = comments
+                else:
+                    # 如果实际获取不到评论，也设为中性
+                    logger.warning(
+                        f"帖子声称有{post_info['comment_count']}条评论，但实际获取不到评论内容")
+                    result["sentiment"] = "中性"
+                    result["comments"] = []
+            except Exception as e:
+                logger.error(f"获取或分析评论时出错: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                result["sentiment"] = "中性"
+                result["comments"] = []
+
+        return result 
+
+    def navigate_to_telegraph_section(self, section: str) -> bool:
+        """
+        导航到电报下的特定板块
+
+        Args:
+            section: 要导航到的板块，如"公司"或"看盘"
+
+        Returns:
+            是否成功导航到指定板块
+        """
+        try:
+            # 第一步：导航到首页
+            logger.info("导航到网站首页")
+            self.page.goto(self.base_url)
+            self.page.wait_for_load_state("networkidle")
+            time.sleep(2)
+
+            # 保存首页截图
+            self.page.screenshot(path="debug/homepage.png")
+
+            # 第二步：点击顶部导航栏中的"电报"按钮
+            logger.info("尝试点击顶部导航栏中的'电报'按钮")
+
+            # 尝试多种选择器定位顶部导航栏中的"电报"按钮
+            telegraph_selectors = [
+                "header a:has-text('电报')",
+                "nav a:has-text('电报')",
+                ".header a:has-text('电报')",
+                ".nav a:has-text('电报')",
+                "a.nav-item:has-text('电报')",
+                "a:has-text('电报')"
+            ]
+
+            clicked = False
+            for selector in telegraph_selectors:
+                try:
+                    # 查找电报按钮
+                    elements = self.page.query_selector_all(selector)
+                    logger.info(
+                        f"使用选择器 '{selector}' 找到 {len(elements)} 个可能的电报导航元素")
+
+                    for element in elements:
+                        # 确认是顶部导航中的电报按钮
+                        text = element.inner_text().strip()
+                        if text == "电报":
+                            # 尝试判断是否是首页顶部导航栏中的元素
+                            # 可以检查父元素或位置信息来确认
+                            is_top_nav = element.evaluate(
+                                "el => { const rect = el.getBoundingClientRect(); return rect.top < 100; }")
+                            if is_top_nav:
+                                element.click()
+                                logger.info("成功点击顶部导航栏中的'电报'按钮")
+                                self.page.wait_for_load_state("networkidle")
+                                time.sleep(2)
+                                clicked = True
+                                break
+                except Exception as e:
+                    logger.debug(f"使用选择器'{selector}'点击电报导航时出错: {e}")
+                    continue
+
+                if clicked:
+                    break
+
+            if not clicked:
+                # 如果上述方法都失败，尝试更直接的方法
+                try:
+                    logger.warning("常规方法未能点击'电报'，尝试更直接的点击方法")
+
+                    # 保存当前页面源码用于调试
+                    with open("debug/before_click_telegraph.html", "w", encoding="utf-8") as f:
+                        f.write(self.page.content())
+
+                    # 直接使用evaluateHandle执行JavaScript查找并点击
+                    self.page.evaluate("""
+                        () => {
+                            // 尝试查找所有导航链接
+                            const links = Array.from(document.querySelectorAll('a'));
+                            // 查找包含"电报"文本的链接
+                            const telegraphLink = links.find(link => link.textContent.trim() === '电报');
+                            if (telegraphLink) {
+                                // 模拟点击
+                                telegraphLink.click();
+                                return true;
+                            }
+                            return false;
+                        }
+                    """)
+
+                    time.sleep(2)
+                    self.page.wait_for_load_state("networkidle")
+
+                    # 检查导航是否成功
+                    current_url = self.page.url
+                    if "telegraph" in current_url.lower():
+                        logger.info("通过JavaScript成功导航到电报页面")
+                        clicked = True
+                    else:
+                        logger.warning(
+                            f"尝试点击电报后，URL为 {current_url}，可能未成功导航到电报页面")
+                except Exception as e:
+                    logger.error(f"直接点击'电报'失败: {e}")
+
+            if not clicked:
+                # 如果还是失败，尝试直接导航到电报页面
+                logger.warning("无法通过点击导航到电报页面，尝试直接访问电报URL")
+                try:
+                    telegraph_url = f"{self.base_url}/telegraph"
+                    self.page.goto(telegraph_url)
+                    self.page.wait_for_load_state("networkidle")
+                    time.sleep(2)
+                    logger.info(f"直接导航到电报页面URL: {telegraph_url}")
+                    clicked = True
+                except Exception as e:
+                    logger.error(f"直接导航到电报URL失败: {e}")
+                    return False
+
+            # 保存电报页面截图
+            self.page.screenshot(path="debug/telegraph_page.png")
+
+            # 第三步：在电报页面上点击子导航（如"公司"或"看盘"）
+            logger.info(f"尝试在电报页面上点击'{section}'子导航")
+
+            # 尝试多种选择器定位子导航
+            sub_section_selectors = [
+                f".sub-nav a:has-text('{section}')",
+                f"nav.secondary-nav a:has-text('{section}')",
+                f".tabs a:has-text('{section}')",
+                f"[role='tablist'] a:has-text('{section}')",
+                f"a.tab:has-text('{section}')",
+                f"a:has-text('{section}')"
+            ]
+
+            clicked = False
+            for selector in sub_section_selectors:
+                try:
+                    elements = self.page.query_selector_all(selector)
+                    logger.info(
+                        f"使用选择器 '{selector}' 找到 {len(elements)} 个可能的'{section}'子导航元素")
+
+                    for element in elements:
+                        text = element.inner_text().strip()
+                        if text == section:
+                            # 尝试确认这是电报页面下的子导航
+                            element.click()
+                            logger.info(f"成功点击电报页面下的'{section}'子导航")
+                            self.page.wait_for_load_state("networkidle")
+                            time.sleep(2)
+                            clicked = True
+                            break
+                except Exception as e:
+                    logger.debug(f"使用选择器'{selector}'点击'{section}'子导航时出错: {e}")
+                    continue
+
+                if clicked:
+                    break
+
+            if not clicked:
+                # 如果上述方法都失败，尝试更直接的方法
+                try:
+                    logger.warning(f"常规方法未能点击'{section}'子导航，尝试更直接的点击方法")
+
+                    # 保存当前页面源码用于调试
+                    with open(f"debug/before_click_{section}.html", "w", encoding="utf-8") as f:
+                        f.write(self.page.content())
+
+                    # 直接使用evaluateHandle执行JavaScript查找并点击
+                    self.page.evaluate(f"""
+                        () => {{
+                            // 尝试查找所有导航链接
+                            const links = Array.from(document.querySelectorAll('a'));
+                            // 查找包含"{section}"文本的链接
+                            const sectionLink = links.find(link => link.textContent.trim() === '{section}');
+                            if (sectionLink) {{
+                                // 模拟点击
+                                sectionLink.click();
+                                return true;
+                            }}
+                            return false;
+                        }}
+                    """)
+
+                    time.sleep(2)
+                    self.page.wait_for_load_state("networkidle")
+                    logger.info(f"尝试通过JavaScript点击'{section}'子导航")
+                    clicked = True
+                except Exception as e:
+                    logger.error(f"直接点击'{section}'子导航失败: {e}")
+
+            # 保存子导航页面截图
+            self.page.screenshot(path=f"debug/telegraph_{section}_page.png")
+
+            return clicked
+
+        except Exception as e:
+            logger.error(f"导航到电报{section}板块时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False 
+
+    def extract_posts_from_page(self) -> List[Dict[str, Any]]:
+        """
+        从当前页面提取所有帖子信息
+        
+        Returns:
+            帖子信息列表
+        """
+        posts = []
+        reached_cutoff = False
+        try:
+            # 保存页面源码用于分析
+            with open("debug/current_page.html", "w", encoding="utf-8") as f:
+                f.write(self.page.content())
+            
+            # 根据网站结构找到真正的电报帖子列表容器
+            # 只选择class为b-c-e6e7ea telegraph-list的元素，这是真正的帖子
+            telegraph_containers = [
+                ".b-c-e6e7ea.telegraph-list",  # 财联社电报列表容器（精确匹配）
+                "div.b-c-e6e7ea.telegraph-list",  # 带div标签的精确匹配
+                ".telegraph-list",  # 更广泛的匹配，但可能误匹配
+                "[class='b-c-e6e7ea telegraph-list']"  # 精确匹配完整class
+            ]
+            
+            # 明确排除的选择器
+            exclude_selectors = [
+                ".telegraph-content-left", 
+                "[class*='telegraph-content-left']",
+                "div.telegraph-content-left",
+                ".clearfix.content-main-box",  # 排除页面顶部的内容
+                "div:has-text('电报持续更新中')"  # 排除包含此文本的元素
+            ]
+            
+            # 先获取需要排除的元素
+            exclude_elements = []
+            for selector in exclude_selectors:
+                try:
+                    elements = self.page.query_selector_all(selector)
+                    logger.info(f"找到 {len(elements)} 个需要排除的元素，使用选择器 '{selector}'")
+                    exclude_elements.extend(elements)
+                except Exception as e:
+                    logger.debug(f"使用选择器'{selector}'查找需排除元素时出错: {e}")
+            
+            for container_selector in telegraph_containers:
+                try:
+                    containers = self.page.query_selector_all(container_selector)
+                    logger.info(f"使用选择器 '{container_selector}' 找到 {len(containers)} 个电报容器")
+                    
+                    if not containers or len(containers) == 0:
+                        continue
+                    
+                    # 在容器内寻找真正的帖子元素
+                    for container in containers:
+                        # 检查是否是需要排除的元素
+                        is_excluded = False
+                        for exclude_el in exclude_elements:
+                            # 比较元素是否相同
+                            try:
+                                is_same = container.evaluate("(el, excludeEl) => el === excludeEl", exclude_el)
+                                if is_same:
+                                    is_excluded = True
+                                    break
+                            except Exception:
+                                pass
+                        
+                        if is_excluded:
+                            logger.info("跳过需要排除的元素")
+                            continue
+                        
+                        # 排除页面顶部的日期时间区域（红框区域）
+                        # 检查是否包含"电报持续更新中"文本
+                        container_text = container.inner_text()
+                        if "电报持续更新中" in container_text or "电报持续更新" in container_text:
+                            logger.info("跳过页面顶部的更新提示区域")
+                            continue
+                        
+                        # 检查是否包含标题指示符【】
+                        has_title_indicator = re.search(r'【.*?】', container_text)
+                        
+                        # 提取帖子信息
+                        post_info = self.extract_post_info(container)
+                        
+                        # 只保留具有有效标题和日期的帖子
+                        if (post_info["title"] and post_info["title"] != "无标题" and post_info["title"] != "错误") or has_title_indicator:
+                            # 如果没有提取出标题但有标题指示符，尝试从文本中提取标题
+                            if post_info["title"] == "无标题" and has_title_indicator:
+                                title_match = re.search(r'【(.*?)】', container_text)
+                                if title_match:
+                                    post_info["title"] = title_match.group(1)
+                                    logger.info(f"从内容中提取标题: {post_info['title']}")
+                            
+                            # 检查日期是否在截止日期和当前时间范围内
+                            if post_info["date"] and post_info["time"]:
+                                try:
+                                    post_date = parse_datetime(post_info["date"], post_info["time"])
+                                    # 使用新的is_in_date_range函数来检查日期范围
+                                    if not is_in_date_range(post_date, self.cutoff_date):
+                                        logger.info(f"帖子日期 {post_info['date']} {post_info['time']} 早于截止日期 {self.cutoff_date}，跳过")
+                                        # 如果帖子时间早于截止日期，则标记已达到截止日期，不再继续提取
+                                        if post_date < self.cutoff_date:
+                                            logger.info("已找到早于截止日期的帖子，停止提取")
+                                            reached_cutoff = True
+                                            break
+                                        continue
+                                except Exception as e:
+                                    logger.error(f"检查日期时出错: {e}")
+                            
+                            # 验证是否是真正的帖子元素
+                            # 1. 检查是否包含真实内容
+                            content_length = len(container_text.strip())
+                            # 2. 确保不是页面导航元素
+                            is_navigation = any(nav_text in container_text.lower() for nav_text in ["首页", "菜单", "导航", "全部"])
+                            
+                            if content_length > 50 and not is_navigation:  # 有足够内容且不是导航元素
+                                posts.append(post_info)
+                                logger.info(f"找到帖子: {post_info['title']}")
+                        
+                        # 如果已达到截止日期，不再继续处理后面的容器
+                        if reached_cutoff:
+                            break
+                        
+                        # 如果找到了足够的帖子，就不再尝试其他选择器
+                        if len(posts) >= 5:
+                            break
+                except Exception as e:
+                    logger.error(f"使用选择器'{container_selector}'提取帖子时出错: {e}")
+                    continue
+            
+            # 如果上述方法没有找到帖子，回退到原来的查找方法
+            if not posts:
+                logger.warning("未找到电报列表容器，尝试直接查找帖子元素")
+                
+                # 根据观察到的电报帖子结构，修改选择器
+                post_selectors = [
+                    ".telegraph-content-box",
+                    ".telegraph-list div.clearfix",
+                    "[class*='telegraph-content']",
+                    ".news-item",
+                    "[class*='news-item']",
+                    "div.clearfix.m-b-15"  # 根据网站实际结构调整
+                ]
+                
+                for selector in post_selectors:
+                    try:
+                        post_elements = self.page.query_selector_all(selector)
+                        logger.info(f"使用选择器 '{selector}' 找到 {len(post_elements)} 个可能的帖子元素")
+                        
+                        for element in post_elements:
+                            # 跳过页面顶部的更新提示
+                            element_text = element.inner_text()
+                            if "电报持续更新中" in element_text or "电报持续更新" in element_text:
+                                logger.info("跳过页面顶部的更新提示区域")
+                                continue
+                            
+                            # 检查是否包含时间格式（如"23:48:20"或"16:50:47"）
+                            if re.search(r'\d{2}:\d{2}(:\d{2})?', element_text):
+                                # 提取帖子信息
+                                post_info = self.extract_post_info(element)
+                                
+                                # 尝试从内容中提取标题，如果没有标题
+                                if post_info["title"] == "无标题":
+                                    title_match = re.search(r'【(.*?)】', element_text)
+                                    if title_match:
+                                        post_info["title"] = title_match.group(1)
+                                        logger.info(f"从内容中提取标题: {post_info['title']}")
+                                
+                                # 验证是有效的帖子
+                                is_valid_post = (
+                                    len(element_text.strip()) > 50 and  # 有足够内容
+                                    (post_info["title"] != "无标题" or re.search(r'【.*?】', element_text))  # 有标题或标题指示符
+                                )
+                                
+                                if is_valid_post:
+                                    # 检查日期是否在截止日期和当前时间范围内
+                                    if post_info["date"] and post_info["time"]:
+                                        try:
+                                            post_date = parse_datetime(post_info["date"], post_info["time"])
+                                            # 使用新的is_in_date_range函数来检查日期范围
+                                            if not is_in_date_range(post_date, self.cutoff_date):
+                                                logger.info(f"帖子日期 {post_info['date']} {post_info['time']} 早于截止日期 {self.cutoff_date}，跳过")
+                                                # 如果帖子时间早于截止日期，则标记已达到截止日期，不再继续提取
+                                                if post_date < self.cutoff_date:
+                                                    logger.info("已找到早于截止日期的帖子，停止提取")
+                                                    reached_cutoff = True
+                                                    break
+                                                continue
+                                        except Exception as e:
+                                            logger.error(f"检查日期时出错: {e}")
+                                    
+                                    # 添加到结果列表
+                                    posts.append(post_info)
+                                    logger.info(f"找到帖子: {post_info['title']}")
+                        
+                        # 如果已达到截止日期，不再继续处理
+                        if reached_cutoff:
+                            break
+                            
+                        # 如果找到了足够的帖子，就不再尝试其他选择器
+                        if len(posts) >= 5:
+                            break
+                    except Exception as e:
+                        logger.error(f"使用选择器'{selector}'提取帖子时出错: {e}")
+                        continue
+            
+            # 如果仍然找不到帖子，尝试直接提取页面中的时间和文本
+            if not posts:
+                logger.warning("未找到任何帖子元素，尝试直接从页面提取时间和文本")
+                
+                try:
+                    # 提取页面文本并解析
+                    page_text = self.page.content()
+                    time_pattern = r'\d{2}:\d{2}:\d{2}'
+                    
+                    # 使用更简单的评估方式直接获取页面文本
+                    text_elements = self.page.evaluate("""
+                        () => {
+                            // 获取所有可见文本节点
+                            const textNodes = [];
+                            const walker = document.createTreeWalker(
+                                document.body, 
+                                NodeFilter.SHOW_TEXT,
+                                null,
+                                false
+                            );
+                            
+                            let node;
+                            while(node = walker.nextNode()) {
+                                const text = node.textContent.trim();
+                                if (text && text.match(/\\d{2}:\\d{2}:\\d{2}/)) {
+                                    // 如果包含时间格式，记录时间和周围文本
+                                    const parentElement = node.parentElement;
+                                    if (parentElement) {
+                                        textNodes.push({
+                                            time: text.match(/\\d{2}:\\d{2}:\\d{2}/)[0],
+                                            parentText: parentElement.textContent.trim(),
+                                            html: parentElement.innerHTML
+                                        });
+                                    }
+                                }
+                            }
+                            return textNodes;
+                        }
+                    """)
+                    
+                    logger.info(f"从页面直接提取到 {len(text_elements)} 个包含时间的文本片段")
+                    
+                    # 处理提取到的文本
+                    for item in text_elements:
+                        try:
+                            time_str = item.get("time", "")
+                            parent_text = item.get("parentText", "")
+                            
+                            # 构建简单的帖子信息
+                            # 尝试从周围文本提取标题：通常是【】之间的内容
+                            title_match = re.search(r'【(.+?)】', parent_text)
+                            title = title_match.group(1) if title_match else parent_text[:100]
+                            
+                            # 使用当前日期
+                            date_str = datetime.datetime.now().strftime("%Y-%m-%d")
+                            
+                            # 检查日期是否在截止日期和当前时间范围内
+                            try:
+                                post_date = parse_datetime(date_str, time_str)
+                                # 使用新的is_in_date_range函数来检查日期范围
+                                if not is_in_date_range(post_date, self.cutoff_date):
+                                    logger.info(f"帖子日期 {date_str} {time_str} 早于截止日期 {self.cutoff_date}，跳过")
+                                    # 如果帖子时间早于截止日期，则标记已达到截止日期，不再继续提取
+                                    if post_date < self.cutoff_date:
+                                        logger.info("已找到早于截止日期的帖子，停止提取")
+                                        reached_cutoff = True
+                                        break
+                                    continue
+                            except Exception as e:
+                                logger.error(f"检查日期时出错: {e}")
+                            
+                            post_info = {
+                                "title": title,
+                                "date": date_str,
+                                "time": time_str,
+                                "comment_count": 0,  # 无法确定评论数
+                                "element": None  # 没有具体元素
+                            }
+                            
+                            posts.append(post_info)
+                            logger.info(f"直接从文本提取到帖子: {title}")
+                            
+                            # 如果提取到足够数量的帖子，停止
+                            if len(posts) >= 10:
+                                break
+                        except Exception as e:
+                            logger.error(f"处理文本片段时出错: {e}")
+                        
+                        # 如果已达到截止日期，不再继续处理
+                        if reached_cutoff:
+                            break
+                except Exception as e:
+                    logger.error(f"直接提取页面文本时出错: {e}")
+        
+        except Exception as e:
+            logger.error(f"从页面提取帖子时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+        
+        # 去重并排序
+        unique_posts = []
+        seen_titles = set()
+        
+        for post in posts:
+            # 跳过无标题的帖子（可能是误识别的元素）
+            if post["title"] == "无标题" or post["title"] == "错误":
+                continue
+                
+            if post["title"] not in seen_titles:
+                seen_titles.add(post["title"])
+                unique_posts.append(post)
+        
+        logger.info(f"总共提取到 {len(unique_posts)} 个不重复帖子")
+        return unique_posts 
+
+    def load_more_posts(self) -> bool:
+        """
+        加载更多帖子
+
+        Returns:
+            是否成功加载更多
+        """
+        try:
+            # 保存当前页面截图，用于调试
+            self.page.screenshot(path="debug/before_load_more.png")
+
+            # 先滚动到页面底部
+            self.page.evaluate(
+                "window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(1)
+
+            # 根据截图尝试多种可能的"加载更多"按钮
+            load_more_selectors = [
+                "button:has-text('加载更多')",
+                "a:has-text('加载更多')",
+                "div:has-text('加载更多')",
+                "span:has-text('加载更多')",
+                ".load-more",
+                "[class*='load-more']",
+                "[class*='loadMore']"
+            ]
+
+            for selector in load_more_selectors:
+                try:
+                    load_more_elements = self.page.query_selector_all(selector)
+                    logger.info(
+                        f"使用选择器 '{selector}' 找到 {len(load_more_elements)} 个加载更多元素")
+
+                    for element in load_more_elements:
+                        # 检查元素是否可见
+                        is_visible = element.is_visible()
+                        if is_visible:
+                            text = element.inner_text().strip()
+                            logger.info(f"找到可见的加载更多元素: '{text}'")
+
+                            # 如果文本包含"加载更多"，点击它
+                            if "加载" in text:
+                                # 先确保元素在视口内
+                                element.scroll_into_view_if_needed()
+                                time.sleep(0.5)
+
+                                element.click()
+                                logger.info("成功点击加载更多按钮")
+                                self.page.wait_for_load_state("networkidle")
+                                time.sleep(2)
+
+                                # 保存加载后的截图
+                                self.page.screenshot(
+                                    path="debug/after_load_more.png")
+                                return True
+                except Exception as e:
+                    logger.debug(f"使用选择器'{selector}'尝试加载更多时出错: {e}")
+                    continue
+
+            # 如果没有找到明确的加载更多按钮，尝试点击页面底部可能的元素
+            logger.warning("未找到明确的加载更多按钮，尝试点击页面底部元素")
+            try:
+                # 获取页面高度
+                page_height = self.page.evaluate("document.body.scrollHeight")
+
+                # 点击页面底部区域
+                self.page.mouse.click(300, page_height - 100)
+                time.sleep(2)
+
+                # 检查页面高度是否增加
+                new_height = self.page.evaluate("document.body.scrollHeight")
+                if new_height > page_height:
+                    logger.info("点击页面底部后页面高度增加，可能已加载更多内容")
+                    return True
+            except Exception as e:
+                logger.error(f"尝试点击页面底部时出错: {e}")
+
+            logger.info("无法找到或点击加载更多按钮")
+            return False
+        except Exception as e:
+            logger.error(f"加载更多帖子时出错: {e}")
+            return False
+
+    def scrape_section(self, section: str) -> List[Dict[str, Any]]:
+        """
+        爬取指定板块的所有帖子
+
+        Args:
+            section: 板块名称，如"公司"或"看盘"
+
+        Returns:
+            分析结果列表
+        """
+        section_results = []
+        reached_cutoff = False
+
+        try:
+            # 保存当前页面截图用于调试
+            self.page.screenshot(path=f"debug/{section}_page.png")
+
+            # 记录已处理的帖子标题，避免重复处理
+            processed_titles = set()
+
+            # 循环处理直到达到截止日期或无法加载更多
+            load_more_attempts = 0
+            max_load_more_attempts = 30  # 设置最大尝试次数，避免无限循环
+
+            # 直接开始提取和处理帖子，而不是再次导航
+            # 上一步已经导航到了相应板块
+
+            while not reached_cutoff and load_more_attempts < max_load_more_attempts:
+                # 提取当前页面的帖子
+                posts = self.extract_posts_from_page()
+
+                if not posts:
+                    logger.warning(f"在'{section}'板块未找到帖子，尝试加载更多")
+                    if not self.load_more_posts():
+                        logger.info("无法加载更多帖子，结束处理")
+                        break
+                    load_more_attempts += 1
+                    continue
+
+                # 处理每个帖子
+                for post in posts:
+                    # 跳过已处理的帖子
+                    if post["title"] in processed_titles:
+                        continue
+
+                    # 添加到已处理集合
+                    processed_titles.add(post["title"])
+
+                    # 检查日期是否在有效范围内
+                    if post["date"] and post["time"]:
+                        try:
+                            post_date = parse_datetime(post["date"], post["time"])
+                            # 如果帖子日期不在截止日期和当前时间范围内，则跳过
+                            if not is_in_date_range(post_date, self.cutoff_date):
+                                logger.info(f"帖子日期 {post['date']} {post['time']} 早于截止日期 {self.cutoff_date}，跳过")
+                                # 如果帖子时间早于截止日期，则标记已达到截止日期，不再继续爬取
+                                if post_date < self.cutoff_date:
+                                    logger.info("已找到早于截止日期的帖子，停止爬取")
+                                    reached_cutoff = True
+                                    break
+                                continue
+                        except Exception as e:
+                            logger.error(f"检查日期时出错: {e}")
+
+                    # 分析帖子
+                    result = self.analyze_post(post)
+                    result["section"] = section  # 添加板块信息
+
+                    # 添加到结果列表
+                    section_results.append(result)
+                    logger.info(f"处理完成帖子: '{post['title']}', 情感: {result.get('sentiment', '未知')}")
+
+                # 如果已达到截止日期，停止加载更多
+                if reached_cutoff:
+                    logger.info("已达到截止日期，停止爬取")
+                    break
+
+                # 尝试加载更多
+                if not self.load_more_posts():
+                    logger.info("无法加载更多帖子，结束处理")
+                    break
+
+                load_more_attempts += 1
+                logger.info(f"已尝试加载更多 {load_more_attempts} 次")
+
+                # 短暂暂停，避免请求过于频繁
+                time.sleep(1)
+
+        except Exception as e:
+            logger.error(f"爬取'{section}'板块时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+        logger.info(f"'{section}'板块爬取完成，共获取 {len(section_results)} 条结果")
+        return section_results
+
+    def run(self, sections: List[str] = None) -> List[Dict[str, Any]]:
+        """
+        执行爬取和分析过程
+
+        Args:
+            sections: 要爬取的电报子板块列表，默认为["看盘", "公司"]
+
+        Returns:
+            包含所有分析结果的列表，仅包含cutoff_date到当前时间范围内的电报
+        """
+        try:
+            # 如果没有指定板块，默认爬取"看盘"和"公司"
+            if sections is None:
+                sections = ["看盘", "公司"]
+
+            # 首先直接导航到电报页面
+            logger.info("直接导航到电报页面")
+            try:
+                telegraph_url = f"{self.base_url}/telegraph"
+                self.page.goto(telegraph_url)
+                self.page.wait_for_load_state("networkidle")
+                time.sleep(2)
+                logger.info(f"直接导航到电报页面URL: {telegraph_url}")
+
+                # 保存电报页面截图用于确认
+                self.page.screenshot(path="debug/telegraph_main_page.png")
+            except Exception as e:
+                logger.error(f"直接导航到电报页面失败: {e}")
+                # 如果直接导航失败，尝试从首页导航
+                logger.info("尝试从首页导航到电报")
+                self.navigate_to_site()
+
+                # 点击电报链接
+                try:
+                    self.page.click("text=电报")
+                    self.page.wait_for_load_state("networkidle")
+                    time.sleep(2)
+                    logger.info("从首页点击导航到电报页面")
+                except Exception as e:
+                    logger.error(f"从首页点击导航到电报页面失败: {e}")
+                    return []
+
+            # 根据指定的板块列表爬取内容
+            logger.info(f"开始爬取电报，子板块: {sections}")
+
+            for section in sections:
+                try:
+                    logger.info(f"开始爬取'{section}'板块...")
+
+                    # 点击电报页面中的子导航
+                    logger.info(f"尝试点击电报页面中的'{section}'子导航")
+                    try:
+                        # 首先确保我们在电报主页面
+                        if "telegraph" not in self.page.url:
+                            telegraph_url = f"{self.base_url}/telegraph"
+                            self.page.goto(telegraph_url)
+                            self.page.wait_for_load_state("networkidle")
+                            time.sleep(2)
+
+                        # 截图用于确认当前页面
+                        self.page.screenshot(
+                            path=f"debug/before_click_{section}.png")
+
+                        # 尝试点击子导航
+                        clicked = False
+
+                        # 使用更简单直接的方式点击子导航
+                        sub_nav_selectors = [
+                            f"a:has-text('{section}')",
+                            f"[class*='nav'] a:has-text('{section}')",
+                            f"[class*='tab'] a:has-text('{section}')"
+                        ]
+
+                        for selector in sub_nav_selectors:
+                            try:
+                                elements = self.page.query_selector_all(
+                                    selector)
+                                for element in elements:
+                                    text = element.inner_text().strip()
+                                    if text == section:
+                                        element.click()
+                                        logger.info(f"成功点击'{section}'子导航")
+                                        self.page.wait_for_load_state(
+                                            "networkidle")
+                                        time.sleep(2)
+                                        clicked = True
+                                        break
+
+                                if clicked:
+                                    break
+                            except Exception as e:
+                                logger.debug(f"使用选择器'{selector}'点击子导航时出错: {e}")
+                                continue
+
+                        if not clicked:
+                            # 使用JavaScript尝试点击
+                            self.page.evaluate(f"""
+                                () => {{
+                                    const links = Array.from(document.querySelectorAll('a'));
+                                    for (const link of links) {{
+                                        if (link.textContent.trim() === '{section}') {{
+                                            link.click();
+                                            return true;
+                                        }}
+                                    }}
+                                    return false;
+                                }}
+                            """)
+                            logger.info(f"尝试使用JavaScript点击'{section}'子导航")
+                            time.sleep(2)
+                            self.page.wait_for_load_state("networkidle")
+
+                        # 截图确认点击后的页面
+                        self.page.screenshot(
+                            path=f"debug/after_click_{section}.png")
+
+                    except Exception as e:
+                        logger.error(f"点击'{section}'子导航失败: {e}")
+                        # 如果点击失败，尝试重新加载电报页面
+                        continue
+
+                    # 爬取当前板块内容
+                    section_results = self.scrape_section(section)
+                    self.results.extend(section_results)
+                    logger.info(
+                        f"'{section}'板块爬取完成，获取到{len(section_results)}条电报")
+                except Exception as e:
+                    logger.error(f"爬取'{section}'板块时出错: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+
+            return self.results
+
+        except Exception as e:
+            logger.error(f"运行电报爬虫时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return self.results 
