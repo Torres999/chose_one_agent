@@ -34,8 +34,6 @@ class TelegraphScraper(BaseScraper):
         self.sentiment_analyzer = SentimentAnalyzer()
         self.debug = debug
         self.section = section
-        # 创建调试目录
-        os.makedirs("debug", exist_ok=True)
 
     def get_comments(self, post_element) -> List[str]:
         """
@@ -229,10 +227,6 @@ class TelegraphScraper(BaseScraper):
                 try:
                     logger.warning("常规方法未能点击'电报'，尝试更直接的点击方法")
 
-                    # 保存当前页面源码用于调试
-                    with open("debug/before_click_telegraph.html", "w", encoding="utf-8") as f:
-                        f.write(self.page.content())
-
                     # 直接使用evaluateHandle执行JavaScript查找并点击
                     self.page.evaluate("""
                         () => {
@@ -277,9 +271,6 @@ class TelegraphScraper(BaseScraper):
                     logger.error(f"直接导航到电报URL失败: {e}")
                     return False
 
-            # 保存电报页面截图
-            self.page.screenshot(path="debug/telegraph_page.png")
-
             # 第三步：在电报页面上点击子导航（如"公司"或"看盘"）
             logger.info(f"尝试在电报页面上点击'{section}'子导航")
 
@@ -322,10 +313,6 @@ class TelegraphScraper(BaseScraper):
                 try:
                     logger.warning(f"常规方法未能点击'{section}'子导航，尝试更直接的点击方法")
 
-                    # 保存当前页面源码用于调试
-                    with open(f"debug/before_click_{section}.html", "w", encoding="utf-8") as f:
-                        f.write(self.page.content())
-
                     # 直接使用evaluateHandle执行JavaScript查找并点击
                     self.page.evaluate(f"""
                         () => {{
@@ -348,9 +335,6 @@ class TelegraphScraper(BaseScraper):
                     clicked = True
                 except Exception as e:
                     logger.error(f"直接点击'{section}'子导航失败: {e}")
-
-            # 保存子导航页面截图
-            self.page.screenshot(path=f"debug/telegraph_{section}_page.png")
 
             return clicked
 
@@ -375,8 +359,11 @@ class TelegraphScraper(BaseScraper):
             html = post_element.inner_html()
             element_text = post_element.inner_text()
             
-            # 排除非真实帖子内容（如"桌面通知 声音提醒 语音电报..."）
-            if "桌面通知" in element_text or "声音提醒" in element_text or "语音电报" in element_text:
+            # 记录提取的原始文本内容
+            logger.debug(f"提取帖子原始文本内容: {element_text[:100]}...")
+            
+            # 排除非真实帖子内容
+            if "桌面通知" in element_text or "声音提醒" in element_text:
                 return {
                     "title": "非帖子内容",
                     "date": "",
@@ -386,7 +373,7 @@ class TelegraphScraper(BaseScraper):
                     "is_valid_post": False
                 }
             
-            # 首先从文本内容中提取【】包围的标题，适合财联社电报格式
+            # 从文本内容中提取【】包围的标题
             title = "无标题"
             title_match = re.search(r'【(.*?)】', element_text)
             if title_match:
@@ -409,25 +396,51 @@ class TelegraphScraper(BaseScraper):
                     r'(\d{4}\.\d{2}\.\d{2})',  # 2025.04.11
                     r'(\d{4}-\d{2}-\d{2})',     # 2025-04-11
                     r'(\d{4}/\d{2}/\d{2})',     # 2025/04/11
-                    r'(\d{1,2})月(\d{1,2})日'   # 如 4月11日
                 ]
                 
                 for pattern in date_patterns:
                     date_match = re.search(pattern, element_text)
                     if date_match:
-                        if '月' in pattern:  # 处理 "X月Y日" 格式
-                            if len(date_match.groups()) == 2:
-                                month, day = date_match.groups()
-                                year = datetime.datetime.now().year
-                                date_str = f"{year}.{int(month):02d}.{int(day):02d}"
-                        else:  # 其他格式转换为标准格式
-                            date_str = date_match.group(1).replace('-', '.').replace('/', '.')
+                        date_str = date_match.group(1).replace('-', '.').replace('/', '.')
                         break
+                
+                # 如果还是没找到，尝试提取月日格式
+                if date_str == "未知日期":
+                    month_day_match = re.search(r'(\d{1,2})月(\d{1,2})日', element_text)
+                    if month_day_match:
+                        month, day = month_day_match.groups()
+                        year = datetime.datetime.now().year
+                        date_str = f"{year}.{int(month):02d}.{int(day):02d}"
             
             # 匹配时间格式：14:05:39 或 14:05
             time_match = re.search(r'(\d{2}:\d{2}(:\d{2})?)', element_text)
             if time_match:
                 time_str = time_match.group(1)
+            
+            # 如果仍然没有找到日期和时间，尝试找到一个连续的数字和冒号组合
+            if date_str == "未知日期" and time_str == "未知时间":
+                datetime_match = re.search(r'(\d{1,4}[/\-\.]\d{1,2}[/\-\.]\d{1,4}[\s\S]+?\d{1,2}:\d{1,2})', element_text)
+                if datetime_match:
+                    dt_str = datetime_match.group(1)
+                    logger.debug(f"找到日期时间组合: {dt_str}")
+                    
+                    # 提取日期部分
+                    date_part = re.search(r'(\d{1,4}[/\-\.]\d{1,2}[/\-\.]\d{1,4})', dt_str)
+                    if date_part:
+                        date_parts = re.split(r'[/\-\.]', date_part.group(1))
+                        if len(date_parts) == 3:
+                            # 确保年份是4位数
+                            if len(date_parts[0]) != 4 and len(date_parts[2]) == 4:
+                                # 假设格式是DD/MM/YYYY
+                                date_str = f"{date_parts[2]}.{int(date_parts[1]):02d}.{int(date_parts[0]):02d}"
+                            else:
+                                # 假设格式是YYYY/MM/DD
+                                date_str = f"{date_parts[0]}.{int(date_parts[1]):02d}.{int(date_parts[2]):02d}"
+                    
+                    # 提取时间部分
+                    time_part = re.search(r'(\d{1,2}:\d{1,2}(:\d{1,2})?)', dt_str)
+                    if time_part:
+                        time_str = time_part.group(1)
             
             # 提取评论数
             comment_count = 0
@@ -438,6 +451,15 @@ class TelegraphScraper(BaseScraper):
                 except ValueError:
                     comment_count = 0
             
+            # 如果仍然没找到评论数，尝试其他格式
+            if comment_count == 0:
+                comment_match2 = re.search(r'评论[：:]\s*(\d+)', element_text)
+                if comment_match2:
+                    try:
+                        comment_count = int(comment_match2.group(1))
+                    except ValueError:
+                        comment_count = 0
+            
             # 如果没有匹配到标题但有内容，使用内容的前30个字符作为标题
             if title == "无标题" and len(element_text.strip()) > 30:
                 # 去除可能的日期时间
@@ -445,6 +467,9 @@ class TelegraphScraper(BaseScraper):
                 cleaned_text = re.sub(r'\d{2}:\d{2}(:\d{2})?', '', cleaned_text)
                 # 取前30个字符
                 title = cleaned_text.strip()[:30].strip() + "..."
+            
+            # 记录提取到的信息
+            logger.debug(f"提取到的帖子信息 - 标题: {title}, 日期: {date_str}, 时间: {time_str}, 评论数: {comment_count}")
             
             return {
                 "title": title,
@@ -457,6 +482,8 @@ class TelegraphScraper(BaseScraper):
             
         except Exception as e:
             logger.error(f"提取帖子信息时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return {
                 "title": "错误",
                 "date": "未知日期",
@@ -477,119 +504,175 @@ class TelegraphScraper(BaseScraper):
         seen_titles = set()  # 用于去重，避免同一帖子被多个选择器重复添加
         reached_cutoff = False
         try:
-            # 根据网站结构找到真正的电报帖子列表容器
-            # 只选择class为b-c-e6e7ea telegraph-list的元素，这是真正的帖子
-            telegraph_containers = [
-                ".b-c-e6e7ea.telegraph-list",  # 财联社电报列表容器（精确匹配）
-                "div.b-c-e6e7ea.telegraph-list",  # 带div标签的精确匹配
-                ".telegraph-list",  # 更广泛的匹配，但可能误匹配
-                "[class='b-c-e6e7ea telegraph-list']"  # 精确匹配完整class
+            # 优化选择器，专注于WEB版本
+            telegraph_item_selectors = [
+                ".telegraph-item",
+                "[class*='telegraph-item']",
+                ".article-item",
+                "[class*='article-item']",
+                ".post-item",
+                "[class*='post-item']",
+                ".telegraph-content-box",
+                ".m-b-15",
+                "div.m-b-15",
+                "article",
+                ".item"
             ]
             
-            # 明确排除的选择器
-            exclude_selectors = [
-                ".telegraph-content-left", 
-                "[class*='telegraph-content-left']",
-                "div.telegraph-content-left",
-                ".clearfix.content-main-box",  # 排除页面顶部的内容
-                "div:has-text('电报持续更新中')"  # 排除包含此文本的元素
-            ]
+            items_found = False
             
-            # 先获取需要排除的元素
-            exclude_elements = []
-            for selector in exclude_selectors:
+            for selector in telegraph_item_selectors:
                 try:
-                    elements = self.page.query_selector_all(selector)
-                    logger.info(f"找到 {len(elements)} 个需要排除的元素，使用选择器 '{selector}'")
-                    exclude_elements.extend(elements)
-                except Exception as e:
-                    logger.debug(f"使用选择器'{selector}'查找需排除元素时出错: {e}")
-            
-            for container_selector in telegraph_containers:
-                try:
-                    containers = self.page.query_selector_all(container_selector)
-                    logger.info(f"使用选择器 '{container_selector}' 找到 {len(containers)} 个电报容器")
+                    items = self.page.query_selector_all(selector)
+                    logger.info(f"使用选择器 '{selector}' 找到 {len(items)} 个可能的帖子元素")
                     
-                    if not containers or len(containers) == 0:
-                        continue
-                    
-                    # 在容器内寻找真正的帖子元素
-                    for container in containers:
-                        # 检查是否是需要排除的元素
-                        is_excluded = False
-                        for exclude_el in exclude_elements:
-                            # 比较元素是否相同
-                            try:
-                                is_same = container.evaluate("(el, excludeEl) => el === excludeEl", exclude_el)
-                                if is_same:
-                                    is_excluded = True
-                                    break
-                            except Exception:
-                                pass
-                        
-                        if is_excluded:
-                            logger.info("跳过需要排除的元素")
-                            continue
-                        
-                        # 排除页面顶部的日期时间区域（红框区域）
-                        # 检查是否包含"电报持续更新中"文本
-                        container_text = container.inner_text()
-                        if "电报持续更新中" in container_text or "电报持续更新" in container_text:
-                            logger.info("跳过页面顶部的更新提示区域")
-                            continue
-                        
-                        # 检查是否包含标题指示符【】
-                        has_title_indicator = re.search(r'【.*?】', container_text)
+                    if items and len(items) > 0:
+                        items_found = True
                         
                         # 提取帖子信息
-                        post_info = self.extract_post_info(container)
-                        
-                        # 跳过无效的帖子（如界面元素）
-                        if not post_info.get("is_valid_post", False):
-                            continue
-                        
-                        # 只保留具有有效标题和日期的帖子
-                        if (post_info["title"] and post_info["title"] != "无标题" and post_info["title"] != "错误") or has_title_indicator:
-                            # 如果没有提取出标题但有标题指示符，尝试从文本中提取标题
-                            if post_info["title"] == "无标题" and has_title_indicator:
-                                title_match = re.search(r'【(.*?)】', container_text)
-                                if title_match:
-                                    post_info["title"] = title_match.group(1)
-                                    logger.info(f"从内容中提取标题: {post_info['title']}")
+                        for item in items:
+                            # 获取元素文本内容
+                            element_text = item.inner_text().strip()
                             
-                            # 检查标题是否已处理过（避免重复）
-                            if post_info["title"] in seen_titles:
+                            # 如果元素内容太少，可能不是有效帖子
+                            if len(element_text) < 10:
+                                continue
+                                
+                            # 排除页面顶部的提示信息
+                            if "电报持续更新" in element_text:
+                                continue
+                                
+                            # 提取帖子信息
+                            post_info = self.extract_post_info(item)
+                            
+                            # 跳过无效的帖子
+                            if not post_info.get("is_valid_post", False):
                                 continue
                             
+                            # 如果标题已经处理过，跳过
+                            if post_info["title"] in seen_titles:
+                                continue
+                                
                             # 检查日期是否在截止日期之后
                             if post_info["date"] and post_info["time"]:
                                 try:
                                     post_date = parse_datetime(post_info["date"], post_info["time"])
-                                    # 如果帖子时间早于截止日期，则标记已达到截止日期，但不处理此帖子
+                                    # 如果帖子时间早于截止日期，标记已达到截止日期
                                     if post_date < self.cutoff_date:
-                                        logger.info(f"帖子日期 {post_info['date']} {post_info['time']} 早于截止日期 {self.cutoff_date}，停止爬取")
+                                        logger.info(f"帖子日期 {post_info['date']} {post_info['time']} 早于截止日期 {self.cutoff_date}")
                                         reached_cutoff = True
-                                        break
                                     else:
                                         # 保存符合日期要求的帖子
                                         posts.append(post_info)
-                                        seen_titles.add(post_info["title"])  # 添加到已处理标题集合
-                                        logger.info(f"找到帖子: {post_info['title']}")
+                                        seen_titles.add(post_info["title"])
+                                        logger.info(f"找到符合条件的帖子: {post_info['title']}, 日期: {post_info['date']} {post_info['time']}")
                                 except Exception as e:
                                     logger.error(f"检查日期时出错: {e}")
-                        
-                        # 如果已达到截止日期，不再继续处理后面的容器
-                        if reached_cutoff:
-                            break
+                                    # 如果无法解析日期，仍将帖子添加到结果中
+                                    posts.append(post_info)
+                                    seen_titles.add(post_info["title"])
+                                    logger.info(f"找到帖子(无法解析日期): {post_info['title']}")
+                
                 except Exception as e:
-                    logger.error(f"使用选择器'{container_selector}'提取帖子时出错: {e}")
+                    logger.error(f"使用选择器'{selector}'提取帖子时出错: {e}")
                     continue
                 
-                # 如果找到了足够的帖子并且达到截止日期，就不再尝试其他容器选择器
-                if len(posts) > 0 and reached_cutoff:
+                # 如果找到了足够的帖子，不再尝试其他选择器
+                if len(posts) > 0:
                     break
+                    
+            # 如果没有找到任何帖子元素，尝试直接解析页面内容
+            if not items_found or len(posts) == 0:
+                logger.warning("未能通过常规选择器找到帖子，尝试直接解析页面内容")
+                
+                # 使用JavaScript直接分析页面结构
+                try:
+                    page_posts = self.page.evaluate("""
+                        () => {
+                            // 查找所有可能的帖子元素
+                            const possibleItems = Array.from(document.querySelectorAll('div, article'))
+                                .filter(el => {
+                                    // 尝试识别可能的帖子元素特征
+                                    const text = el.textContent;
+                                    const hasTitle = text.includes('【') && text.includes('】');
+                                    const hasDateTime = /\\d{2}:\\d{2}/.test(text);
+                                    const isReasonableSize = el.offsetHeight > 50 && el.offsetWidth > 200;
+                                    
+                                    return (hasTitle || hasDateTime) && isReasonableSize;
+                                });
+                            
+                            return possibleItems.map(el => {
+                                return {
+                                    html: el.outerHTML,
+                                    text: el.textContent.trim(),
+                                    rect: el.getBoundingClientRect()
+                                };
+                            });
+                        }
+                    """)
+                    
+                    logger.info(f"JavaScript分析找到 {len(page_posts)} 个可能的帖子元素")
+                    
+                    # 根据JavaScript分析结果，直接构建帖子信息
+                    for post_data in page_posts:
+                        post_text = post_data["text"]
+                        
+                        # 提取标题
+                        title = "无标题"
+                        title_match = re.search(r'【(.*?)】', post_text)
+                        if title_match:
+                            title = title_match.group(1)
+                        
+                        # 提取日期和时间
+                        date_str = "未知日期"
+                        time_str = "未知时间"
+                        
+                        date_match = re.search(r'(\d{4}\.\d{2}\.\d{2})', post_text)
+                        if date_match:
+                            date_str = date_match.group(1)
+                            
+                        time_match = re.search(r'(\d{2}:\d{2}(:\d{2})?)', post_text)
+                        if time_match:
+                            time_str = time_match.group(1)
+                            
+                        # 跳过已处理的标题
+                        if title in seen_titles:
+                            continue
+                            
+                        # 创建帖子信息
+                        post_info = {
+                            "title": title,
+                            "date": date_str,
+                            "time": time_str,
+                            "comment_count": 0,
+                            "element": None,  # JS分析模式下没有DOM元素
+                            "is_valid_post": True
+                        }
+                        
+                        # 检查日期是否在截止日期之后
+                        if date_str != "未知日期" and time_str != "未知时间":
+                            try:
+                                post_date = parse_datetime(date_str, time_str)
+                                # 如果帖子时间早于截止日期
+                                if post_date < self.cutoff_date:
+                                    logger.info(f"帖子日期 {date_str} {time_str} 早于截止日期 {self.cutoff_date}")
+                                    reached_cutoff = True
+                                else:
+                                    # 保存符合日期要求的帖子
+                                    posts.append(post_info)
+                                    seen_titles.add(title)
+                                    logger.info(f"JS分析找到符合条件的帖子: {title}, 日期: {date_str} {time_str}")
+                            except Exception as e:
+                                logger.error(f"JS分析检查日期时出错: {e}")
+                                # 如果无法解析日期，仍将帖子添加到结果中
+                                posts.append(post_info)
+                                seen_titles.add(title)
+                                logger.info(f"JS分析找到帖子(无法解析日期): {title}")
+                except Exception as e:
+                    logger.error(f"执行JavaScript分析页面结构时出错: {e}")
             
-            logger.info(f"总共找到 {len(posts)} 条帖子")
+            logger.info(f"总共找到 {len(posts)} 条符合条件的帖子")
+            
             return posts, reached_cutoff
         
         except Exception as e:
@@ -600,9 +683,10 @@ class TelegraphScraper(BaseScraper):
 
     def load_more_posts(self) -> bool:
         """
-        加载更多帖子，支持两种方式：
+        加载更多帖子，专注于WEB版本的加载逻辑：
         1. 点击"加载更多"按钮
         2. 模拟滚动到页面底部触发自动加载
+        3. 注入JS分析页面结构并调用加载函数
 
         Returns:
             是否成功加载更多
@@ -610,27 +694,29 @@ class TelegraphScraper(BaseScraper):
         try:
             # 获取当前页面高度和内容数量作为基准
             old_height = self.page.evaluate("document.body.scrollHeight")
-            old_content_count = len(self.page.query_selector_all(".telegraph-content-box, .clearfix.m-b-15, [class*='telegraph-item']"))
+            old_content_count = len(self.page.query_selector_all(".telegraph-item, [class*='telegraph-item'], .article-item, [class*='article-item']"))
             logger.info(f"当前页面高度: {old_height}px, 内容数量: {old_content_count}")
             
             # 首先尝试点击"加载更多"按钮
-            logger.info("首先尝试点击'加载更多'按钮")
+            logger.info("尝试点击'加载更多'按钮")
             load_more_selectors = [
                 "button:has-text('加载更多')",
                 "a:has-text('加载更多')",
                 "div:has-text('加载更多')",
+                "span:has-text('加载更多')",
+                "button:has-text('更多')",
+                "a:has-text('更多')",
+                "div:has-text('更多')",
                 "[class*='load-more']",
                 "[class*='loadMore']",
-                ".load-more",
+                "[class*='more-btn']",
+                "[class*='moreBtn']",
+                "[class*='load_more']",
+                "[id*='load-more']",
+                "[id*='loadMore']",
+                ".load-more", 
                 ".loadMore",
-                "button.load-more",
-                "button.loadMore",
-                "a.load-more",
-                "a.loadMore",
-                "[class*='more']:not([disabled])",
-                "a.more",
-                "button.more",
-                "div.more"
+                ".more"
             ]
             
             # 尝试点击加载更多按钮
@@ -647,247 +733,165 @@ class TelegraphScraper(BaseScraper):
                                 time.sleep(0.5)
                                 btn.click()
                                 # 等待页面加载
-                                self.page.wait_for_load_state("networkidle", timeout=3000)
-                                time.sleep(1)
+                                time.sleep(2)
                                 
                                 # 检查内容是否增加
                                 new_height = self.page.evaluate("document.body.scrollHeight")
-                                new_content_count = len(self.page.query_selector_all(".telegraph-content-box, .clearfix.m-b-15, [class*='telegraph-item']"))
+                                new_content_count = len(self.page.query_selector_all(".telegraph-item, [class*='telegraph-item'], .article-item, [class*='article-item']"))
                                 
                                 if new_height > old_height + 5 or new_content_count > old_content_count:
                                     logger.info(f"点击加载更多按钮成功: 内容从 {old_content_count} 增加到 {new_content_count} 个元素")
-                                return True
+                                    return True
                 except Exception as e:
                     logger.debug(f"点击加载更多按钮'{selector}'时出错: {e}")
                     continue
 
-            # 如果所有加载更多按钮都尝试失败，则尝试滚动策略
-            logger.info("所有加载更多按钮尝试失败，转为尝试滚动策略")
+            # 如果没有找到加载更多按钮，尝试直接滚动页面
+            logger.info("尝试滚动页面触发加载更多")
             
-            # 滚动策略集合
-            scroll_strategies = [
-                # 策略1: 原生JS滚动，快速滚到底部
-                {
-                    "name": "快速滚动到底部",
-                    "js": "window.scrollTo(0, document.body.scrollHeight);"
-                },
-                # 策略2: 平滑滚动
-                {
-                    "name": "平滑滚动到底部",
-                    "js": """
-                        window.scrollTo({
-                            top: document.body.scrollHeight,
-                            behavior: 'smooth'
-                        });
-                    """
-                },
-                # 策略3: 触发自动加载的关键事件
-                {
-                    "name": "触发滚动事件",
-                    "js": """
-                        window.dispatchEvent(new Event('scroll'));
-                        document.dispatchEvent(new Event('scroll'));
-                    """
-                },
-                # 策略4: 分步滚动
-                {
-                    "name": "分步滚动",
-                    "js": """
-                        const height = document.body.scrollHeight;
-                        const steps = 5;
-                        for (let i = 1; i <= steps; i++) {
-                            setTimeout(() => {
-                                window.scrollTo(0, height * i / steps);
-                            }, i * 100);
-                        }
-                    """
-                },
-                # 策略5: 手动模拟滚动事件
-                {
-                    "name": "模拟滚轮事件",
-                    "js": """
-                        const scrollEvent = new WheelEvent('wheel', {
-                            deltaY: 1000,
-                            bubbles: true
-                        });
-                        document.dispatchEvent(scrollEvent);
-                    """
-                },
-                # 策略6: 使用IntersectionObserver触发器
-                {
-                    "name": "触发IntersectionObserver",
-                    "js": """
-                        // 尝试触发可能存在的Intersection Observer
-                        const lastElements = Array.from(document.querySelectorAll('*')).slice(-30);
-                        lastElements.forEach(el => {
-                            // 强制元素进入视口
-                            el.scrollIntoView();
-                        });
-                    """
-                },
-                # 策略7: 模拟触摸滑动(针对移动端兼容)
-                {
-                    "name": "模拟触摸滑动",
-                    "js": """
-                        // 模拟触摸滑动事件 (对移动端页面可能有效)
-                        const touchStartEvent = new TouchEvent('touchstart', {
-                            bubbles: true,
-                            touches: [{ clientX: 200, clientY: 200 }]
-                        });
-                        const touchEndEvent = new TouchEvent('touchend', {
-                            bubbles: true,
-                            touches: [{ clientX: 200, clientY: 50 }]
-                        });
-                        document.body.dispatchEvent(touchStartEvent);
-                        setTimeout(() => document.body.dispatchEvent(touchEndEvent), 100);
-                    """
-                }
-            ]
+            # 直接滚动到页面底部
+            self.page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(2)
             
-            # 尝试每一种滚动策略
-            for strategy in scroll_strategies:
-                logger.info(f"尝试滚动策略: {strategy['name']}")
-                try:
-                    # 执行滚动策略的JavaScript
-                    self.page.evaluate(strategy['js'])
-                    
-                    # 等待内容加载
-                    time.sleep(1)
-                    try:
-                        self.page.wait_for_load_state("networkidle", timeout=3000)
-                    except Exception:
-                        pass
-                    time.sleep(1)
-                    
-                    # 检查是否有新内容
-                    new_height = self.page.evaluate("document.body.scrollHeight")
-                    new_content_count = len(self.page.query_selector_all(".telegraph-content-box, .clearfix.m-b-15, [class*='telegraph-item']"))
-                    
-                    # 内容增加了，策略成功
-                    if new_height > old_height + 10 or new_content_count > old_content_count:
-                        logger.info(f"滚动策略 '{strategy['name']}' 成功: 内容从 {old_content_count} 增加到 {new_content_count} 个元素")
-                    return True
-                except Exception as e:
-                    logger.debug(f"执行滚动策略 '{strategy['name']}' 时出错: {e}")
+            # 检查内容是否增加
+            new_height = self.page.evaluate("document.body.scrollHeight")
+            new_content_count = len(self.page.query_selector_all(".telegraph-item, [class*='telegraph-item'], .article-item, [class*='article-item']"))
             
-            # 最后尝试点击页面底部区域的多个位置
-            logger.info("尝试点击页面底部多个位置")
-            try:
-                viewport = self.page.evaluate("""
-                    () => ({
-                        width: window.innerWidth,
-                        height: window.innerHeight
-                    })
-                """)
+            if new_height > old_height + 5 or new_content_count > old_content_count:
+                logger.info(f"滚动页面成功: 内容从 {old_content_count} 增加到 {new_content_count} 个元素")
+                return True
                 
-                # 确保先滚动到底部
-                self.page.evaluate("window.scrollTo(0, document.body.scrollHeight - 50);")
-                time.sleep(1)
-                
-                # 在底部区域点击多个位置
-                click_positions = [
-                    (viewport["width"] // 2, viewport["height"] - 20),  # 中间底部
-                    (viewport["width"] // 4, viewport["height"] - 20),  # 左下角
-                    (viewport["width"] * 3 // 4, viewport["height"] - 20),  # 右下角
-                    (viewport["width"] // 2, viewport["height"] - 100),  # 中间偏上
-                    (20, viewport["height"] - 20),  # 最左边
-                    (viewport["width"] - 20, viewport["height"] - 20)   # 最右边
-                ]
-                
-                for x, y in click_positions:
-                    self.page.mouse.click(x, y)
-                    time.sleep(1)
+            # 尝试更高级的JavaScript解决方案
+            logger.info("尝试使用JavaScript分析页面结构并触发加载更多")
+            success = self.page.evaluate("""
+                () => {
+                    // 定义可能的加载更多按钮选择器
+                    const loadMoreSelectors = [
+                        '.load-more', '.loadMore', '.more-btn', '.moreBtn',
+                        '[class*="load-more"]', '[class*="loadMore"]',
+                        'button:contains("加载更多")', 'a:contains("加载更多")',
+                        'div:contains("加载更多")', 'span:contains("加载更多")',
+                        'button:contains("更多")', 'a:contains("更多")',
+                        '[class*="more"]'
+                    ];
                     
-                    # 检查是否有新内容
-                    new_content_count = len(self.page.query_selector_all(".telegraph-content-box, .clearfix.m-b-15, [class*='telegraph-item']"))
-                    if new_content_count > old_content_count:
-                        logger.info(f"点击位置 ({x}, {y}) 后内容增加: 从 {old_content_count} 到 {new_content_count} 个元素")
-                        return True
-            except Exception as e:
-                logger.debug(f"点击底部区域时出错: {e}")
-            
-            # 最后一招：通过JS注入帮助翻页
-            logger.info("尝试通过JS帮助识别并触发翻页功能")
-            try:
-                success = self.page.evaluate("""
-                    () => {
-                        // 尝试找出所有可能是"加载更多"的元素
-                        const possibleMoreElements = [
-                            ...document.querySelectorAll('a'),
-                            ...document.querySelectorAll('button'),
-                            ...document.querySelectorAll('div[role="button"]'),
-                            ...document.querySelectorAll('div.more'),
-                            ...document.querySelectorAll('span.more')
-                        ];
-                        
-                        // 过滤出可能是加载更多的元素
-                        const moreButtons = possibleMoreElements.filter(el => {
-                            const text = el.textContent.toLowerCase();
-                            return (text.includes('更多') || 
-                                   text.includes('加载') || 
-                                   text.includes('more') ||
-                                   text.includes('load') ||
-                                   el.className.toLowerCase().includes('more') ||
-                                   el.className.toLowerCase().includes('load'));
-                        });
-                        
-                        // 尝试点击每一个可能的加载更多按钮
-                        for (const btn of moreButtons) {
-                            if (btn.offsetParent !== null) { // 元素可见
-                                btn.scrollIntoView();
-                                btn.click();
+                    // 尝试找到并点击加载更多按钮
+                    for (const selector of loadMoreSelectors) {
+                        const elements = document.querySelectorAll(selector);
+                        for (const element of elements) {
+                            if (element.offsetParent !== null) {  // 检查元素是否可见
+                                console.log('找到加载更多按钮:', element);
+                                element.scrollIntoView({behavior: 'smooth', block: 'center'});
+                                setTimeout(() => element.click(), 500);
                                 return true;
                             }
                         }
-                        
-                        // 或者尝试直接调用可能存在的加载更多函数
-                        const possibleFunctions = [
-                            'loadMore', 
-                            'loadMoreData', 
-                            'showMore',
-                            'appendData'
-                        ];
-                        
-                        for (const fnName of possibleFunctions) {
-                            if (typeof window[fnName] === 'function') {
-                                try {
-                                    window[fnName]();
-                                    return true;
-                                } catch (e) {
-                                    console.log('调用函数出错:', e);
-                                }
+                    }
+                    
+                    // 如果找不到按钮，尝试滚动页面
+                    window.scrollTo({
+                        top: document.body.scrollHeight,
+                        behavior: 'smooth'
+                    });
+                    
+                    // 尝试触发常见的滚动事件
+                    window.dispatchEvent(new Event('scroll'));
+                    document.dispatchEvent(new Event('scroll'));
+                    
+                    // 查找并调用可能的加载更多函数
+                    const possibleFunctions = [
+                        'loadMore', 'loadMoreData', 'appendMore', 'nextPage',
+                        'moreData', 'getMore', 'fetchMore', 'loadmoreHandle'
+                    ];
+                    
+                    // 在全局范围内查找
+                    for (const fnName of possibleFunctions) {
+                        if (typeof window[fnName] === 'function') {
+                            try {
+                                console.log(`尝试调用全局函数: ${fnName}`);
+                                window[fnName]();
+                                return true;
+                            } catch (e) {
+                                console.log(`调用函数 ${fnName} 失败:`, e);
                             }
                         }
-                        
-                        return false;
                     }
-                """)
-                
-                if success:
-                    logger.info("通过JS成功找到并点击了翻页元素")
-                    time.sleep(2)
                     
-                    # 检查是否有新内容
-                    new_content_count = len(self.page.query_selector_all(".telegraph-content-box, .clearfix.m-b-15, [class*='telegraph-item']"))
-                    if new_content_count > old_content_count:
-                        logger.info(f"JS帮助点击后内容增加: 从 {old_content_count} 到 {new_content_count} 个元素")
-                        return True
-            except Exception as e:
-                logger.debug(f"尝试JS注入帮助翻页时出错: {e}")
+                    // 尝试查找可能的加载更多元素并模拟点击
+                    const possibleLoadMoreElements = Array.from(document.querySelectorAll('*'))
+                        .filter(el => {
+                            // 尝试匹配可能的加载更多元素
+                            if (!el.textContent) return false;
+                            const text = el.textContent.toLowerCase();
+                            const classAttr = (el.className || '').toLowerCase();
+                            const idAttr = (el.id || '').toLowerCase();
+                            
+                            return (text.includes('更多') || text.includes('加载') ||
+                                   classAttr.includes('more') || classAttr.includes('load') ||
+                                   idAttr.includes('more') || idAttr.includes('load')) &&
+                                   el.offsetParent !== null;  // 确保元素可见
+                        });
+                    
+                    if (possibleLoadMoreElements.length > 0) {
+                        console.log('找到可能的加载更多元素:', possibleLoadMoreElements.length);
+                        for (const el of possibleLoadMoreElements) {
+                            try {
+                                el.scrollIntoView({behavior: 'smooth', block: 'center'});
+                                setTimeout(() => el.click(), 500);
+                                return true;
+                            } catch (e) {
+                                console.log('点击元素失败:', e);
+                            }
+                        }
+                    }
+                    
+                    return false;
+                }
+            """)
             
-            logger.info("所有翻页策略均失败")
+            if success:
+                logger.info("JavaScript分析触发加载更多可能成功")
+                time.sleep(3)  # 给足够的时间加载
+                
+                # 检查内容是否增加
+                new_height = self.page.evaluate("document.body.scrollHeight")
+                new_content_count = len(self.page.query_selector_all(".telegraph-item, [class*='telegraph-item'], .article-item, [class*='article-item']"))
+                
+                if new_height > old_height + 5 or new_content_count > old_content_count:
+                    logger.info(f"JavaScript分析成功: 内容从 {old_content_count} 增加到 {new_content_count} 个元素")
+                    return True
+            
+            # 尝试更复杂的分步滚动
+            logger.info("尝试分步滚动页面")
+            heights = [old_height // 4, old_height // 2, (old_height * 3) // 4, old_height]
+            
+            for height in heights:
+                self.page.evaluate(f"window.scrollTo(0, {height});")
+                time.sleep(1)
+            
+            # 最终再次检查内容是否增加
+            final_height = self.page.evaluate("document.body.scrollHeight")
+            final_content_count = len(self.page.query_selector_all(".telegraph-item, [class*='telegraph-item'], .article-item, [class*='article-item']"))
+            
+            if final_height > old_height + 5 or final_content_count > old_content_count:
+                logger.info(f"分步滚动成功: 内容从 {old_content_count} 增加到 {final_content_count} 个元素")
+                return True
+            
+            logger.info("所有加载更多尝试均失败")
             return False
             
         except Exception as e:
             logger.error(f"加载更多帖子时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
 
     def scrape_section(self, section: str) -> List[Dict[str, Any]]:
         """
-        爬取指定板块的电报内容
+        抓取指定板块的电报内容
 
         Args:
-            section: 要爬取的板块名称，如"看盘"或"公司"
+            section: 要抓取的板块名称，如"看盘"或"公司"
 
         Returns:
             处理后的电报内容列表
@@ -897,120 +901,147 @@ class TelegraphScraper(BaseScraper):
         
         try:
             load_more_attempts = 0
-            max_load_attempts = 8  # 减少最大加载尝试次数
+            max_load_attempts = 1  # 最大加载尝试次数
             consecutive_failures = 0  # 连续加载失败次数
             
             # 确保当前是正确的板块
             logger.info(f"确保当前页面是 '{section}' 板块")
+            
             try:
-                if section == "看盘":
-                    # 检查URL或页面内容是否包含看盘板块标识
-                    if "kanpan" not in self.page.url.lower() and "看盘" not in self.page.content():
-                        logger.info(f"当前页面不是看盘板块，尝试导航")
-                        self.navigate_to_telegraph_section("看盘")
-                elif section == "公司":
-                    # 检查URL或页面内容是否包含公司板块标识
-                    if "company" not in self.page.url.lower() and "公司" not in self.page.content():
-                        logger.info(f"当前页面不是公司板块，尝试导航")
-                        self.navigate_to_telegraph_section("公司")
+                current_url = self.page.url
+                current_content = self.page.content()
+                
+                if section == "看盘" and "kanpan" not in current_url.lower() and "看盘" not in current_content:
+                    logger.info(f"当前页面不是看盘板块，尝试导航")
+                    self.navigate_to_telegraph_section("看盘")
+                elif section == "公司" and "company" not in current_url.lower() and "公司" not in current_content:
+                    logger.info(f"当前页面不是公司板块，尝试导航")
+                    self.navigate_to_telegraph_section("公司")
+                
+                # 等待页面完全加载
                 time.sleep(2)
+                self.page.wait_for_load_state("networkidle")
             except Exception as e:
                 logger.error(f"确认和导航到正确板块时出错: {e}")
             
-            # 不再默认强制获取最近帖子
-            force_get_recent_posts = False
-            
-            # 只尝试一次获取帖子，如果没有符合条件的，就直接告知用户
+            # 立即提取第一页数据
+            logger.info("立即提取第一页数据")
             posts, reached_cutoff = self.extract_posts_from_page()
             
-            if not posts:
-                # 检查是否已到达截止日期
-                if reached_cutoff:
-                    logger.info(f"已找到帖子但日期早于截止日期 {self.cutoff_date}，未能获取到符合条件的内容")
-                else:
-                    logger.info(f"未找到符合日期范围的帖子，请调整日期范围或检查网页结构")
+            # 判断第一页是否有符合条件的数据
+            if not posts or len(posts) == 0:
+                logger.warning(f"第一页未找到符合条件的数据，不再尝试加载更多")
+                return section_results
                 
-                # 仅尝试一次加载更多
-                logger.info("尝试加载更多内容...")
-                if self.load_more_posts():
-                    # 再次尝试获取帖子
-                    posts, reached_cutoff = self.extract_posts_from_page()
-                    if not posts:
-                        logger.info("加载更多后仍未找到符合日期条件的帖子")
-                        return section_results  # 直接返回空结果
+            # 处理第一页数据    
+            if posts and len(posts) > 0:
+                logger.info(f"第一页发现 {len(posts)} 条帖子")
+                
+                for post in posts:
+                    # 跳过已处理的标题相同的帖子
+                    if post["title"] in processed_titles:
+                        logger.info(f"跳过重复帖子: '{post['title']}'")
+                        continue
+                    
+                    # 把标题加入已处理集合
+                    processed_titles.add(post["title"])
+                    
+                    # 分析帖子
+                    result = self.analyze_post(post)
+                    result["section"] = section  # 添加板块信息
+                    
+                    # 添加到结果列表
+                    section_results.append(result)
+                    logger.info(f"处理完成帖子: '{post['title']}', 情感: {result.get('sentiment', '未知')}")
+                    logger.info(f"帖子日期: {post['date']} {post['time']}")
+            
+            # 如果已经找到符合条件的数据且需要继续加载更多
+            while load_more_attempts < max_load_attempts and consecutive_failures < 3:
+                # 尝试加载更多内容
+                load_more_attempts += 1
+                logger.info(f"尝试第 {load_more_attempts}/{max_load_attempts} 次加载更多内容")
+                
+                # 通过load_more_posts函数加载更多内容
+                if not self.load_more_posts():
+                    consecutive_failures += 1
+                    logger.info(f"尝试加载更多内容失败，连续失败次数: {consecutive_failures}")
+                    
+                    # 随机等待一段时间后重试
+                    random_wait = random.uniform(1.5, 3.0)
+                    logger.info(f"随机等待 {random_wait:.1f} 秒后重试")
+                    time.sleep(random_wait)
+                    
+                    if consecutive_failures >= 3:
+                        logger.info("连续3次未能加载更多内容，结束处理")
+                        break
                 else:
-                    logger.info("尝试加载更多内容失败")
-                    return section_results  # 直接返回空结果
-
-            # 处理正常提取的帖子
-            valid_posts_found = 0
-            for post in posts:
-                # 跳过已处理的标题相同的帖子
-                if post["title"] in processed_titles:
-                    logger.info(f"跳过重复帖子: '{post['title']}'")
+                    # 如果成功加载更多，重置连续失败计数
+                    consecutive_failures = 0
+                
+                # 提取当前页面的帖子
+                new_posts, reached_cutoff = self.extract_posts_from_page()
+                
+                # 如果没有新的符合条件的帖子，增加失败计数
+                if not new_posts or len(new_posts) == 0:
+                    consecutive_failures += 1
+                    logger.info(f"未找到新的符合条件的帖子，连续失败次数: {consecutive_failures}")
+                    
+                    # 如果已经连续3次没有找到新帖子，停止尝试
+                    if consecutive_failures >= 3:
+                        logger.info("连续3次未找到新的符合条件的帖子，结束处理")
+                        break
                     continue
                 
-                # 严格检查帖子日期是否早于截止日期
-                if post["date"] and post["time"]:
-                    try:
-                        post_date = parse_datetime(post["date"], post["time"])
-                        # 如果帖子时间早于截止日期，则跳过处理
-                        if post_date < self.cutoff_date:
-                            logger.info(f"帖子日期 {post['date']} {post['time']} 早于截止日期 {self.cutoff_date}，跳过处理")
-                            continue
-                    except Exception as e:
-                        logger.error(f"检查日期时出错: {e}")
-                        continue  # 如果日期处理出错，跳过该帖子
-
-                # 把标题加入已处理集合
-                processed_titles.add(post["title"])
-                valid_posts_found += 1
-
-                # 分析帖子
-                result = self.analyze_post(post)
-                result["section"] = section  # 添加板块信息
-
-                # 添加到结果列表
-                section_results.append(result)
-                logger.info(f"处理完成帖子: '{post['title']}', 情感: {result.get('sentiment', '未知')}")
-                logger.info(f"帖子日期: {post['date']} {post['time']}")
-
-            # 如果已达到截止日期且找到了足够的帖子，停止加载更多
-            if reached_cutoff and len(section_results) > 0:
-                logger.info("已达到截止日期且找到了足够的帖子，停止爬取")
-                return section_results
-
-            # 如果未找到有效帖子，但也没到截止日期，尝试加载更多一次
-            if valid_posts_found == 0 and not reached_cutoff:
-                logger.info("未找到符合条件的帖子，尝试最后一次加载更多")
-                if self.load_more_posts():
-                    time.sleep(1)
-                    posts, reached_cutoff = self.extract_posts_from_page()
+                # 处理新获取的帖子
+                valid_posts_found = 0
+                for post in new_posts:
+                    # 跳过已处理的标题相同的帖子
+                    if post["title"] in processed_titles:
+                        continue
                     
-                    # 处理新获取的帖子
-                    for post in posts:
-                        if post["title"] in processed_titles:
-                            continue
-                            
-                        if post["date"] and post["time"]:
-                            try:
-                                post_date = parse_datetime(post["date"], post["time"])
-                                if post_date < self.cutoff_date:
-                                    continue
-                            except Exception as e:
-                                logger.error(f"检查日期时出错: {e}")
+                    # 检查帖子日期是否早于截止日期
+                    if post["date"] and post["time"] and post["date"] != "未知日期":
+                        try:
+                            post_date = parse_datetime(post["date"], post["time"])
+                            # 如果帖子时间早于截止日期，则跳过处理
+                            if post_date < self.cutoff_date:
+                                logger.info(f"帖子日期 {post['date']} {post['time']} 早于截止日期 {self.cutoff_date}，跳过处理")
                                 continue
-                                
-                        processed_titles.add(post["title"])
-                        result = self.analyze_post(post)
-                        result["section"] = section
-                        section_results.append(result)
-                        logger.info(f"处理完成帖子: '{post['title']}'")
+                        except Exception as e:
+                            logger.error(f"检查日期时出错: {e}")
+                            # 如果解析失败，仍然处理该帖子
+                    
+                    # 把标题加入已处理集合
+                    processed_titles.add(post["title"])
+                    valid_posts_found += 1
+                    
+                    # 分析帖子
+                    result = self.analyze_post(post)
+                    result["section"] = section  # 添加板块信息
+                    
+                    # 添加到结果列表
+                    section_results.append(result)
+                    logger.info(f"处理完成帖子: '{post['title']}', 情感: {result.get('sentiment', '未知')}")
+                
+                # 如果已达到截止日期且找到了足够的帖子，停止加载更多
+                if reached_cutoff and len(section_results) > 0:
+                    logger.info("已达到截止日期且找到了足够的帖子，停止爬取")
+                    break
+                
+                # 如果本次没有找到任何新的有效帖子，增加连续失败计数
+                if valid_posts_found == 0:
+                    consecutive_failures += 1
+                    logger.info(f"本次未找到新的有效帖子，连续失败次数: {consecutive_failures}")
                 else:
-                    logger.info("最后一次加载更多尝试失败")
+                    # 找到了有效帖子，重置连续失败计数
+                    consecutive_failures = 0
+                
+                # 随机等待时间，避免请求过于频繁
+                random_wait = random.uniform(1.5, 3.0)
+                time.sleep(random_wait)
             
             # 记录最终结果
-            logger.info(f"'{section}'板块爬取完成，获取 {len(section_results)} 条结果")
+            logger.info(f"'{section}'板块爬取完成，经过 {load_more_attempts} 次翻页尝试，获取 {len(section_results)} 条结果")
 
         except Exception as e:
             logger.error(f"爬取'{section}'板块时出错: {e}")
@@ -1130,13 +1161,16 @@ class TelegraphScraper(BaseScraper):
 
                     # 爬取当前板块内容
                     section_results = self.scrape_section(section)
+                    
+                    # 如果该板块没有符合条件的帖子，记录并继续下一个板块
+                    if len(section_results) == 0:
+                        logger.warning(f"在'{section}'板块未找到符合截止日期 {self.cutoff_date} 之后的帖子")
+                        continue
+                        
                     total_posts_found += len(section_results)
                     self.results.extend(section_results)
                     logger.info(f"'{section}'板块爬取完成，获取到{len(section_results)}条电报")
                     
-                    # 如果没有找到符合条件的帖子，明确告知用户
-                    if len(section_results) == 0:
-                        logger.warning(f"在'{section}'板块未找到符合截止日期 {self.cutoff_date} 之后的帖子，请考虑调整日期范围")
                 except Exception as e:
                     logger.error(f"爬取'{section}'板块时出错: {e}")
                     import traceback
