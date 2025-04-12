@@ -35,7 +35,7 @@ env.bak/
 venv.bak/
 
 # IDEs and editors
-idea/
+.idea
 vscode/
 
 # etc
