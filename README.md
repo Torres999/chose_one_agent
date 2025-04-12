@@ -66,20 +66,19 @@ python3 -m playwright install
 
 运行主程序:
 ```
-python3 -m chose_one_agent.main --cutoff_date "2025-04-11 00:00" --module all
+python3 run.py --cutoff_date "2025-04-11 15:53" --sections "看盘" "公司"
 ```
 
 或者使用提供的运行脚本:
 ```
-./run.py --cutoff_date "2025-04-11 00:00" --module all
+./run.py --cutoff_date "2025-04-11 00:00" --sections "看盘" "公司"
 ```
 
 参数说明:
 - `--cutoff_date`: 指定截止日期时间，格式为"YYYY-MM-DD HH:MM"
-- `--module`: 指定要运行的模块，可选值：
-  - `telegraph`: 只运行电报模块
-  - `watch_plate`: 只运行盯盘模块
-  - `all`: 运行所有模块（默认）
+- `--sections`: 指定要运行的模块，可选值：
+  - `看盘`: 只运行电报模块
+  - `公司`: 只运行盯盘模块
 
 ## 系统要求
 - Python 3.6及以上版本
