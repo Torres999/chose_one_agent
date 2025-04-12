@@ -561,27 +561,20 @@ class TelegraphScraper(BaseScraper):
                             if post_info["title"] in seen_titles:
                                 continue
                             
-                            # 检查日期是否在截止日期和当前时间范围内
+                            # 检查日期是否在截止日期之后
                             if post_info["date"] and post_info["time"]:
                                 try:
                                     post_date = parse_datetime(post_info["date"], post_info["time"])
-                                    # 如果帖子时间早于截止日期，则标记已达到截止日期，不保存此帖子并停止提取
-                                        if post_date < self.cutoff_date:
+                                    # 如果帖子时间早于截止日期，则标记已达到截止日期，但不处理此帖子
+                                    if post_date < self.cutoff_date:
                                         logger.info(f"帖子日期 {post_info['date']} {post_info['time']} 早于截止日期 {self.cutoff_date}，停止爬取")
-                                            reached_cutoff = True
-                                            break
-                            
-                                    # 只保存在截止日期之后的帖子
-                            # 验证是否是真正的帖子元素
-                            # 1. 检查是否包含真实内容
-                            content_length = len(container_text.strip())
-                            # 2. 确保不是页面导航元素
-                            is_navigation = any(nav_text in container_text.lower() for nav_text in ["首页", "菜单", "导航", "全部"])
-                            
-                            if content_length > 50 and not is_navigation:  # 有足够内容且不是导航元素
-                                posts.append(post_info)
+                                        reached_cutoff = True
+                                        break
+                                    else:
+                                        # 保存符合日期要求的帖子
+                                        posts.append(post_info)
                                         seen_titles.add(post_info["title"])  # 添加到已处理标题集合
-                                logger.info(f"找到帖子: {post_info['title']}")
+                                        logger.info(f"找到帖子: {post_info['title']}")
                                 except Exception as e:
                                     logger.error(f"检查日期时出错: {e}")
                         
@@ -591,153 +584,10 @@ class TelegraphScraper(BaseScraper):
                 except Exception as e:
                     logger.error(f"使用选择器'{container_selector}'提取帖子时出错: {e}")
                     continue
-            
-            # 如果上述方法没有找到帖子，回退到原来的查找方法
-            if not posts:
-                logger.warning("未找到电报列表容器，尝试直接查找帖子元素")
                 
-                # 根据观察到的电报帖子结构，修改选择器
-                post_selectors = [
-                    ".telegraph-content-box",
-                    ".telegraph-list div.clearfix",
-                    "[class*='telegraph-content']",
-                    ".news-item",
-                    "[class*='news-item']",
-                    "div.clearfix.m-b-15"  # 根据网站实际结构调整
-                ]
-                
-                for selector in post_selectors:
-                    try:
-                        post_elements = self.page.query_selector_all(selector)
-                        logger.info(f"使用选择器 '{selector}' 找到 {len(post_elements)} 个可能的帖子元素")
-                        
-                        for element in post_elements:
-                            # 跳过页面顶部的更新提示
-                            element_text = element.inner_text()
-                            if "电报持续更新中" in element_text or "电报持续更新" in element_text:
-                                logger.info("跳过页面顶部的更新提示区域")
-                                continue
-                            
-                            # 检查是否包含时间格式（如"23:48:20"或"16:50:47"）
-                            if re.search(r'\d{2}:\d{2}(:\d{2})?', element_text):
-                                # 提取帖子信息
-                                post_info = self.extract_post_info(element)
-                                
-                                # 尝试从内容中提取标题，如果没有标题
-                                if post_info["title"] == "无标题":
-                                    title_match = re.search(r'【(.*?)】', element_text)
-                                    if title_match:
-                                        post_info["title"] = title_match.group(1)
-                                
-                                # 如果仍然没有标题，使用内容前30个字符
-                                if post_info["title"] == "无标题" and len(element_text.strip()) > 30:
-                                    post_info["title"] = element_text.strip()[:30].strip() + "..."
-                                
-                                # 检查标题是否已处理过（避免重复）
-                                if post_info["title"] in seen_titles:
-                                    continue
-                                
-                                    # 检查日期是否在截止日期和当前时间范围内
-                                    if post_info["date"] and post_info["time"]:
-                                        try:
-                                            post_date = parse_datetime(post_info["date"], post_info["time"])
-                                        # 如果帖子时间早于截止日期，则标记已达到截止日期，不保存此帖子并停止提取
-                                                if post_date < self.cutoff_date:
-                                            logger.info(f"帖子日期 {post_info['date']} {post_info['time']} 早于截止日期 {self.cutoff_date}，停止爬取")
-                                                    reached_cutoff = True
-                                                    break
-                                    
-                                        # 添加符合日期条件的帖子
-                                    posts.append(post_info)
-                                        seen_titles.add(post_info["title"])  # 添加到已处理标题集合
-                                    logger.info(f"找到帖子: {post_info['title']}")
-                                    except Exception as e:
-                                        logger.error(f"检查日期时出错: {e}")
-                        
-                        # 如果已达到截止日期，不再继续处理
-                        if reached_cutoff:
-                            break
-                    except Exception as e:
-                        logger.error(f"使用选择器'{selector}'提取帖子时出错: {e}")
-                        continue
-            
-            # 如果上述方法仍未找到帖子，尝试最后的回退方法
-            if not posts:
-                logger.warning("未找到电报帖子，尝试使用最通用的选择器")
-                
-                # 使用最通用的选择器，可能包含更多噪声
-                generic_selectors = [
-                    "div.clearfix",
-                    ".clearfix",
-                    "div[class*='content']",
-                    "[class*='item']"
-                ]
-                
-                for selector in generic_selectors:
-                    try:
-                        elements = self.page.query_selector_all(selector)
-                        logger.info(f"使用选择器 '{selector}' 找到 {len(elements)} 个可能的元素")
-                        
-                        for element in elements:
-                            element_text = element.inner_text()
-                            
-                            # 检查是否包含日期和时间格式
-                            date_match = re.search(r'\d{4}\.\d{2}\.\d{2}', element_text)
-                            time_match = re.search(r'\d{2}:\d{2}(:\d{2})?', element_text)
-                            
-                            if date_match and time_match:
-                                date_str = date_match.group(0)
-                                time_str = time_match.group(0)
-                                
-                                # 尝试检查日期是否在范围内
-                            try:
-                                post_date = parse_datetime(date_str, time_str)
-                                    # 如果帖子时间早于截止日期，则标记已达到截止日期，不保存此帖子并停止提取
-                                    if post_date < self.cutoff_date:
-                                        logger.info(f"帖子日期 {date_str} {time_str} 早于截止日期 {self.cutoff_date}，停止爬取")
-                                        reached_cutoff = True
-                                        break
-                                    
-                                    # 尝试提取标题
-                                    title = "无标题"
-                                    title_match = re.search(r'【(.*?)】', element_text)
-                                    if title_match:
-                                        title = title_match.group(1)
-                                    elif len(element_text) > 30:
-                                        # 去除日期和时间
-                                        clean_text = re.sub(r'\d{4}\.\d{2}\.\d{2}|\d{2}:\d{2}(:\d{2})?', '', element_text)
-                                        title = clean_text.strip()[:30] + "..."
-                                    
-                                    # 检查标题是否已处理过（避免重复）
-                                    if title in seen_titles:
-                                    continue
-                            
-                                    # 构造帖子信息
-                            post_info = {
-                                "title": title,
-                                "date": date_str,
-                                "time": time_str,
-                                        "comment_count": 0,
-                                        "element": element
-                            }
-                            
-                                    # 添加到结果中
-                            posts.append(post_info)
-                                    seen_titles.add(title)  # 添加到已处理标题集合
-                                    logger.info(f"找到帖子: {title}")
-                        except Exception as e:
-                                    logger.error(f"处理日期时出错: {e}")
-                        
-                        # 如果已达到截止日期，不再继续处理
-                        if reached_cutoff:
-                            break
-                except Exception as e:
-                        logger.error(f"使用选择器'{selector}'查找元素时出错: {e}")
-                        continue
-                    
-                    # 如果找到了足够的帖子，就不再尝试其他选择器
-                    if len(posts) > 0:
-                        break
+                # 如果找到了足够的帖子并且达到截止日期，就不再尝试其他容器选择器
+                if len(posts) > 0 and reached_cutoff:
+                    break
             
             logger.info(f"总共找到 {len(posts)} 条帖子")
             return posts, reached_cutoff
@@ -910,14 +760,14 @@ class TelegraphScraper(BaseScraper):
                     time.sleep(1)
                     
                     # 检查是否有新内容
-                new_height = self.page.evaluate("document.body.scrollHeight")
+                    new_height = self.page.evaluate("document.body.scrollHeight")
                     new_content_count = len(self.page.query_selector_all(".telegraph-content-box, .clearfix.m-b-15, [class*='telegraph-item']"))
                     
                     # 内容增加了，策略成功
                     if new_height > old_height + 10 or new_content_count > old_content_count:
                         logger.info(f"滚动策略 '{strategy['name']}' 成功: 内容从 {old_content_count} 增加到 {new_content_count} 个元素")
                     return True
-            except Exception as e:
+                except Exception as e:
                     logger.debug(f"执行滚动策略 '{strategy['name']}' 时出错: {e}")
             
             # 最后尝试点击页面底部区域的多个位置
@@ -1047,7 +897,7 @@ class TelegraphScraper(BaseScraper):
         
         try:
             load_more_attempts = 0
-            max_load_attempts = 15  # 增加翻页尝试次数 
+            max_load_attempts = 8  # 减少最大加载尝试次数
             consecutive_failures = 0  # 连续加载失败次数
             
             # 确保当前是正确的板块
@@ -1067,80 +917,100 @@ class TelegraphScraper(BaseScraper):
             except Exception as e:
                 logger.error(f"确认和导航到正确板块时出错: {e}")
             
-            while load_more_attempts < max_load_attempts and consecutive_failures < 3:
-                # 提取当前页面的帖子
-                posts, reached_cutoff = self.extract_posts_from_page()
+            # 不再默认强制获取最近帖子
+            force_get_recent_posts = False
+            
+            # 只尝试一次获取帖子，如果没有符合条件的，就直接告知用户
+            posts, reached_cutoff = self.extract_posts_from_page()
+            
+            if not posts:
+                # 检查是否已到达截止日期
+                if reached_cutoff:
+                    logger.info(f"已找到帖子但日期早于截止日期 {self.cutoff_date}，未能获取到符合条件的内容")
+                else:
+                    logger.info(f"未找到符合日期范围的帖子，请调整日期范围或检查网页结构")
                 
-                # 处理帖子
-                valid_posts_found = 0
-                for post in posts:
-                    # 跳过已处理的标题相同的帖子
-                    if post["title"] in processed_titles:
-                        logger.info(f"跳过重复帖子: '{post['title']}'")
-                        continue
+                # 仅尝试一次加载更多
+                logger.info("尝试加载更多内容...")
+                if self.load_more_posts():
+                    # 再次尝试获取帖子
+                    posts, reached_cutoff = self.extract_posts_from_page()
+                    if not posts:
+                        logger.info("加载更多后仍未找到符合日期条件的帖子")
+                        return section_results  # 直接返回空结果
+                else:
+                    logger.info("尝试加载更多内容失败")
+                    return section_results  # 直接返回空结果
 
-                    # 检查帖子日期是否早于截止日期
-                        try:
-                            post_date = parse_datetime(post["date"], post["time"])
-                        
+            # 处理正常提取的帖子
+            valid_posts_found = 0
+            for post in posts:
+                # 跳过已处理的标题相同的帖子
+                if post["title"] in processed_titles:
+                    logger.info(f"跳过重复帖子: '{post['title']}'")
+                    continue
+                
+                # 严格检查帖子日期是否早于截止日期
+                if post["date"] and post["time"]:
+                    try:
+                        post_date = parse_datetime(post["date"], post["time"])
                         # 如果帖子时间早于截止日期，则跳过处理
-                                if post_date < self.cutoff_date:
+                        if post_date < self.cutoff_date:
                             logger.info(f"帖子日期 {post['date']} {post['time']} 早于截止日期 {self.cutoff_date}，跳过处理")
-                                continue
-                            
-                        # 把标题加入已处理集合
-                        processed_titles.add(post["title"])
-                        valid_posts_found += 1
-                        except Exception as e:
-                            logger.error(f"检查日期时出错: {e}")
+                            continue
+                    except Exception as e:
+                        logger.error(f"检查日期时出错: {e}")
                         continue  # 如果日期处理出错，跳过该帖子
 
-                    # 分析帖子
-                    result = self.analyze_post(post)
-                    result["section"] = section  # 添加板块信息
+                # 把标题加入已处理集合
+                processed_titles.add(post["title"])
+                valid_posts_found += 1
 
-                    # 添加到结果列表
-                    section_results.append(result)
-                    logger.info(f"处理完成帖子: '{post['title']}', 情感: {result.get('sentiment', '未知')}")
-                    logger.info(f"帖子日期: {post['date']} {post['time']}")
+                # 分析帖子
+                result = self.analyze_post(post)
+                result["section"] = section  # 添加板块信息
 
-                # 如果已达到截止日期，停止加载更多
-                if reached_cutoff:
-                    logger.info("已达到截止日期，停止爬取")
-                    break
+                # 添加到结果列表
+                section_results.append(result)
+                logger.info(f"处理完成帖子: '{post['title']}', 情感: {result.get('sentiment', '未知')}")
+                logger.info(f"帖子日期: {post['date']} {post['time']}")
 
-                # 如果本次没有找到任何有效帖子，增加连续失败计数
-                if valid_posts_found == 0:
-                    consecutive_failures += 1
-                    logger.info(f"本次未找到新的有效帖子，连续失败次数: {consecutive_failures}")
-                else:
-                    # 找到了有效帖子，重置连续失败计数
-                    consecutive_failures = 0
+            # 如果已达到截止日期且找到了足够的帖子，停止加载更多
+            if reached_cutoff and len(section_results) > 0:
+                logger.info("已达到截止日期且找到了足够的帖子，停止爬取")
+                return section_results
 
-                # 尝试加载更多内容
-                load_more_attempts += 1
-                logger.info(f"尝试第 {load_more_attempts}/{max_load_attempts} 次加载更多内容")
-                
-                # 通过统一的load_more_posts函数加载更多内容
-                if not self.load_more_posts():
-                    consecutive_failures += 1
-                    logger.info(f"尝试加载更多内容失败，连续失败次数: {consecutive_failures}")
+            # 如果未找到有效帖子，但也没到截止日期，尝试加载更多一次
+            if valid_posts_found == 0 and not reached_cutoff:
+                logger.info("未找到符合条件的帖子，尝试最后一次加载更多")
+                if self.load_more_posts():
+                    time.sleep(1)
+                    posts, reached_cutoff = self.extract_posts_from_page()
                     
-                    # 尝试随机等待一段时间，网站可能有节流机制
-                    random_wait = random.uniform(1.5, 3.0)
-                    logger.info(f"随机等待 {random_wait:.1f} 秒后重试")
-                    time.sleep(random_wait)
-                    
-                    if consecutive_failures >= 3:
-                        logger.info("连续3次未能加载更多内容，结束处理")
-                        break
+                    # 处理新获取的帖子
+                    for post in posts:
+                        if post["title"] in processed_titles:
+                            continue
+                            
+                        if post["date"] and post["time"]:
+                            try:
+                                post_date = parse_datetime(post["date"], post["time"])
+                                if post_date < self.cutoff_date:
+                                    continue
+                            except Exception as e:
+                                logger.error(f"检查日期时出错: {e}")
+                                continue
+                                
+                        processed_titles.add(post["title"])
+                        result = self.analyze_post(post)
+                        result["section"] = section
+                        section_results.append(result)
+                        logger.info(f"处理完成帖子: '{post['title']}'")
                 else:
-                    # 如果成功加载更多，重置连续失败计数并暂停一下
-                    consecutive_failures = 0
-                time.sleep(1)
+                    logger.info("最后一次加载更多尝试失败")
             
             # 记录最终结果
-            logger.info(f"'{section}'板块爬取完成，经过 {load_more_attempts} 次翻页尝试，获取 {len(section_results)} 条结果")
+            logger.info(f"'{section}'板块爬取完成，获取 {len(section_results)} 条结果")
 
         except Exception as e:
             logger.error(f"爬取'{section}'板块时出错: {e}")
@@ -1190,6 +1060,7 @@ class TelegraphScraper(BaseScraper):
 
             # 根据指定的板块列表爬取内容
             logger.info(f"开始爬取电报，子板块: {sections}")
+            total_posts_found = 0  # 跟踪找到的符合条件的帖子总数
 
             for section in sections:
                 try:
@@ -1259,12 +1130,23 @@ class TelegraphScraper(BaseScraper):
 
                     # 爬取当前板块内容
                     section_results = self.scrape_section(section)
+                    total_posts_found += len(section_results)
                     self.results.extend(section_results)
                     logger.info(f"'{section}'板块爬取完成，获取到{len(section_results)}条电报")
+                    
+                    # 如果没有找到符合条件的帖子，明确告知用户
+                    if len(section_results) == 0:
+                        logger.warning(f"在'{section}'板块未找到符合截止日期 {self.cutoff_date} 之后的帖子，请考虑调整日期范围")
                 except Exception as e:
                     logger.error(f"爬取'{section}'板块时出错: {e}")
                     import traceback
                     logger.error(traceback.format_exc())
+            
+            # 结果汇总
+            if total_posts_found == 0:
+                logger.warning(f"未找到任何符合截止日期 {self.cutoff_date} 之后的帖子，请考虑调整日期范围或检查网站结构")
+            else:
+                logger.info(f"共找到 {total_posts_found} 条符合截止日期 {self.cutoff_date} 之后的帖子")
 
             return self.results
 

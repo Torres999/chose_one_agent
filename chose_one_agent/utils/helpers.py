@@ -25,8 +25,8 @@ def parse_datetime(date_str: str, time_str: str) -> datetime.datetime:
     try:
         # 处理空字符串情况
         if not date_str or not time_str:
-            logger.warning(f"日期或时间为空: date='{date_str}', time='{time_str}'，使用当前时间")
-            return datetime.datetime.now()
+            logger.warning(f"日期或时间为空: date='{date_str}', time='{time_str}'，抛出异常")
+            raise ValueError("日期或时间字符串为空")
         
         # 处理只有月份和日期的情况 (如 "05-20")
         if len(date_str.split('-')) == 2:
@@ -44,8 +44,8 @@ def parse_datetime(date_str: str, time_str: str) -> datetime.datetime:
             if time_match:
                 time_str = time_match.group(1)
             else:
-                logger.warning(f"无法从'{time_str}'中提取时间，使用默认时间")
-                time_str = "00:00"
+                logger.warning(f"无法从'{time_str}'中提取时间，抛出异常")
+                raise ValueError(f"无法从'{time_str}'中提取时间")
         
         # 处理只有小时没有分钟的情况
         if re.match(r'^\d+$', time_str):
@@ -81,14 +81,14 @@ def parse_datetime(date_str: str, time_str: str) -> datetime.datetime:
             except ValueError:
                 continue
                 
-        # 如果仍然失败，返回当前时间
-        logger.error(f"无法解析日期: '{date_str}'，使用当前时间")
-        return datetime.datetime.now()
+        # 如果仍然失败，抛出异常
+        logger.error(f"无法解析日期: '{date_str}'")
+        raise ValueError(f"无法解析日期: '{date_str}'")
     
     except Exception as e:
         logger.error(f"日期时间解析错误: {e}, date='{date_str}', time='{time_str}'")
-        # 返回当前时间作为默认值
-        return datetime.datetime.now()
+        # 不再返回当前时间作为默认值，而是抛出异常让调用者处理
+        raise ValueError(f"日期时间解析错误: {e}")
 
 def is_before_cutoff(post_date: datetime.datetime, cutoff_date: datetime.datetime) -> bool:
     """
