@@ -3,6 +3,7 @@ import time
 import datetime
 from typing import List, Dict, Any, Optional
 from playwright.sync_api import sync_playwright, Page, Browser
+from chose_one_agent.utils.config import BASE_URL
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ class BaseScraper:
         self.browser = None
         self.page = None
         self.context = None
-        self.base_url = "https://www..cn"
+        self.base_url = BASE_URL
         self.results = []
         
     def __enter__(self):

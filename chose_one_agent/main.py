@@ -114,17 +114,29 @@ def run_telegraph_scraper(cutoff_date: datetime.datetime, sections: List[str], h
     Returns:
         分析结果列表
     """
-    logger.info(f"开始爬取电报，截止日期: {cutoff_date}, 子板块: {sections}")
+    # 处理并清理板块名称，确保没有空白符和无效字符
+    processed_sections = []
+    for section in sections:
+        section = section.strip()
+        if section:  # 确保不是空字符串
+            processed_sections.append(section)
+    
+    # 如果处理后没有有效的板块，使用默认值
+    if not processed_sections:
+        processed_sections = ["看盘", "公司"]
+        
+    logger.info(f"开始爬取电报，截止日期: {cutoff_date}, 子板块: {processed_sections}")
     
     # 如果是调试模式，设置日志级别为DEBUG
     if debug:
         logging.getLogger("chose_one_agent").setLevel(logging.DEBUG)
     
     try:
-        with TelegraphScraper(cutoff_date=cutoff_date, headless=headless) as scraper:
-            results = scraper.run(sections)
-            logger.info(f"电报爬取完成，共处理了 {len(results)} 条电报")
-            return results
+        # 不使用上下文管理器，直接创建实例
+        scraper = TelegraphScraper(cutoff_date=cutoff_date, headless=headless, debug=debug)
+        results = scraper.run(processed_sections)
+        logger.info(f"电报爬取完成，共处理了 {len(results)} 条电报")
+        return results
     except Exception as e:
         logger.error(f"运行电报爬虫时出错: {e}")
         logger.error(traceback.format_exc())

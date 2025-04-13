@@ -2,160 +2,38 @@
 import logging
 import time
 import datetime
-from typing import List, Dict, Any, Optional
-import traceback
-from playwright.sync_api import sync_playwright
+import os
+from typing import List, Dict, Any, Tuple
+import re
+import random
 
-from chose_one_agent.modules.telegraph.sections.kanpan_scraper import KanpanScraper
-from chose_one_agent.modules.telegraph.sections.company_scraper import CompanyScraper
-from chose_one_agent.utils.config import BASE_URL
+from chose_one_agent.scrapers.base_scraper import BaseScraper
+from chose_one_agent.utils.helpers import parse_datetime, is_before_cutoff, extract_date_time, is_in_date_range
+from chose_one_agent.analyzers.sentiment_analyzer import SentimentAnalyzer
 
 # 配置日志
 logger = logging.getLogger(__name__)
 
 
-class TelegraphScraper:
+class TelegraphScraper(BaseScraper):
     """
-    电报爬虫主类，用于协调不同板块的爬虫
+    财经网站的电报爬虫类，用于抓取和分析电报内容
     """
-    
+
     def __init__(self, cutoff_date, headless=True, debug=False, section="看盘"):
         """
         初始化电报爬虫
-        
+
         Args:
-            cutoff_date: 截止日期，爬虫只会获取该日期到当前时间范围内的电报
+            cutoff_date: 截止日期，爬虫只会获取该日期到当前时间范围内的电报，早于或晚于此范围的电报将被忽略
             headless: 是否使用无头模式运行浏览器
             debug: 是否启用调试模式
             section: 默认抓取的板块，如"看盘"或"公司"
         """
-        self.cutoff_date = cutoff_date
-        self.headless = headless
+        super().__init__(cutoff_date, headless)
+        self.sentiment_analyzer = SentimentAnalyzer()
         self.debug = debug
         self.section = section
-        self.base_url = BASE_URL
-        self.results = []
-        self.playwright = None
-        self.browser = None
-        
-    def __enter__(self):
-        """
-        上下文管理器入口，必要时初始化资源
-        """
-        return self
-        
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """
-        上下文管理器出口，清理资源
-        """
-        pass
-        
-    def run(self, sections: List[str] = None) -> List[Dict[str, Any]]:
-        """
-        执行爬取和分析过程
-        
-        Args:
-            sections: 要爬取的电报子板块列表，默认为["看盘", "公司"]
-            
-        Returns:
-            包含所有分析结果的列表，仅包含cutoff_date到当前时间范围内的电报
-        """
-        try:
-            # 如果没有指定板块，默认爬取"看盘"和"公司"
-            if sections is None:
-                sections = ["看盘", "公司"]
-            
-            # 处理板块名称，去除空格
-            processed_sections = []
-            for section in sections:
-                # 去除前后空格
-                section = section.strip()
-                if section:  # 确保不是空字符串
-                    processed_sections.append(section)
-            
-            # 如果处理后没有有效的板块，使用默认值
-            if not processed_sections:
-                processed_sections = ["看盘", "公司"]
-                
-            logger.info(f"开始爬取电报，子板块: {processed_sections}")
-            total_posts_found = 0  # 跟踪找到的符合条件的帖子总数
-            
-            # 使用单个Playwright实例处理所有板块
-            with sync_playwright() as playwright:
-                for section in processed_sections:
-                    try:
-                        logger.info(f"开始爬取'{section}'板块...")
-                        
-                        if section == "看盘":
-                            # 创建看盘爬虫实例并传入playwright实例
-                            kanpan_scraper = KanpanScraper(self.cutoff_date, self.headless, self.debug)
-                            # 手动初始化（而不是使用上下文管理器）
-                            kanpan_scraper.browser = playwright.chromium.launch(headless=self.headless)
-                            kanpan_scraper.context = kanpan_scraper.browser.new_context(viewport={"width": 1280, "height": 800})
-                            kanpan_scraper.page = kanpan_scraper.context.new_page()
-                            
-                            try:
-                                # 运行爬虫
-                                section_results = kanpan_scraper.run()
-                                
-                                # 如果该板块没有符合条件的帖子，记录并继续下一个板块
-                                if len(section_results) == 0:
-                                    logger.warning(f"在'{section}'板块未找到符合截止日期 {self.cutoff_date} 之后的帖子")
-                                    continue
-                                    
-                                total_posts_found += len(section_results)
-                                self.results.extend(section_results)
-                                logger.info(f"'{section}'板块爬取完成，获取到{len(section_results)}条电报")
-                            finally:
-                                # 确保关闭资源
-                                if kanpan_scraper.browser:
-                                    kanpan_scraper.browser.close()
-                                
-                        elif section == "公司":
-                            # 创建公司爬虫实例并传入playwright实例
-                            company_scraper = CompanyScraper(self.cutoff_date, self.headless, self.debug)
-                            # 手动初始化（而不是使用上下文管理器）
-                            company_scraper.browser = playwright.chromium.launch(headless=self.headless)
-                            company_scraper.context = company_scraper.browser.new_context(viewport={"width": 1280, "height": 800})
-                            company_scraper.page = company_scraper.context.new_page()
-                            
-                            try:
-                                # 运行爬虫
-                                section_results = company_scraper.run()
-                                
-                                # 如果该板块没有符合条件的帖子，记录并继续下一个板块
-                                if len(section_results) == 0:
-                                    logger.warning(f"在'{section}'板块未找到符合截止日期 {self.cutoff_date} 之后的帖子")
-                                    continue
-                                    
-                                total_posts_found += len(section_results)
-                                self.results.extend(section_results)
-                                logger.info(f"'{section}'板块爬取完成，获取到{len(section_results)}条电报")
-                            finally:
-                                # 确保关闭资源
-                                if company_scraper.browser:
-                                    company_scraper.browser.close()
-                        else:
-                            # 未来可能支持的其他板块，目前跳过
-                            logger.warning(f"未支持的板块: {section}，跳过")
-                            continue
-                        
-                    except Exception as e:
-                        logger.error(f"爬取'{section}'板块时出错: {e}")
-                        logger.error(traceback.format_exc())
-            
-            # 结果汇总
-            if total_posts_found == 0:
-                logger.warning(f"未找到任何符合截止日期 {self.cutoff_date} 之后的帖子，请考虑调整日期范围或检查网站结构")
-            else:
-                logger.info(f"共找到 {total_posts_found} 条符合截止日期 {self.cutoff_date} 之后的帖子")
-            
-            return self.results
-            
-        except Exception as e:
-            logger.error(f"运行电报爬虫时出错: {e}")
-            logger.error(traceback.format_exc())
-            return self.results
 
     def get_comments(self, post_element) -> List[str]:
         """
@@ -1170,4 +1048,144 @@ class TelegraphScraper:
             import traceback
             logger.error(traceback.format_exc())
 
-        return section_results 
+        return section_results
+
+    def run(self, sections: List[str] = None) -> List[Dict[str, Any]]:
+        """
+        执行爬取和分析过程
+
+        Args:
+            sections: 要爬取的电报子板块列表，默认为["看盘", "公司"]
+
+        Returns:
+            包含所有分析结果的列表，仅包含cutoff_date到当前时间范围内的电报
+        """
+        try:
+            # 如果没有指定板块，默认爬取"看盘"和"公司"
+            if sections is None:
+                sections = ["看盘", "公司"]
+
+            # 首先直接导航到电报页面
+            logger.info("直接导航到电报页面")
+            try:
+                telegraph_url = f"{self.base_url}/telegraph"
+                self.page.goto(telegraph_url)
+                self.page.wait_for_load_state("networkidle")
+                time.sleep(2)
+                logger.info(f"直接导航到电报页面URL: {telegraph_url}")
+            except Exception as e:
+                logger.error(f"直接导航到电报页面失败: {e}")
+                # 如果直接导航失败，尝试从首页导航
+                logger.info("尝试从首页导航到电报")
+                self.navigate_to_site()
+
+                # 点击电报链接
+                try:
+                    self.page.click("text=电报")
+                    self.page.wait_for_load_state("networkidle")
+                    time.sleep(2)
+                    logger.info("从首页点击导航到电报页面")
+                except Exception as e:
+                    logger.error(f"从首页点击导航到电报页面失败: {e}")
+                    return []
+
+            # 根据指定的板块列表爬取内容
+            logger.info(f"开始爬取电报，子板块: {sections}")
+            total_posts_found = 0  # 跟踪找到的符合条件的帖子总数
+
+            for section in sections:
+                try:
+                    logger.info(f"开始爬取'{section}'板块...")
+
+                    # 点击电报页面中的子导航
+                    logger.info(f"尝试点击电报页面中的'{section}'子导航")
+                    try:
+                        # 首先确保我们在电报主页面
+                        if "telegraph" not in self.page.url:
+                            telegraph_url = f"{self.base_url}/telegraph"
+                            self.page.goto(telegraph_url)
+                            self.page.wait_for_load_state("networkidle")
+                            time.sleep(2)
+
+                        # 尝试点击子导航
+                        clicked = False
+
+                        # 使用更简单直接的方式点击子导航
+                        sub_nav_selectors = [
+                            f"a:has-text('{section}')",
+                            f"[class*='nav'] a:has-text('{section}')",
+                            f"[class*='tab'] a:has-text('{section}')"
+                        ]
+
+                        for selector in sub_nav_selectors:
+                            try:
+                                elements = self.page.query_selector_all(selector)
+                                for element in elements:
+                                    text = element.inner_text().strip()
+                                    if text == section:
+                                        element.click()
+                                        logger.info(f"成功点击'{section}'子导航")
+                                        self.page.wait_for_load_state("networkidle")
+                                        time.sleep(2)
+                                        clicked = True
+                                        break
+
+                                if clicked:
+                                    break
+                            except Exception as e:
+                                logger.debug(f"使用选择器'{selector}'点击子导航时出错: {e}")
+                                continue
+
+                        if not clicked:
+                            # 使用JavaScript尝试点击
+                            self.page.evaluate(f"""
+                                () => {{
+                                    const links = Array.from(document.querySelectorAll('a'));
+                                    for (const link of links) {{
+                                        if (link.textContent.trim() === '{section}') {{
+                                            link.click();
+                                            return true;
+                                        }}
+                                    }}
+                                    return false;
+                                }}
+                            """)
+                            logger.info(f"尝试使用JavaScript点击'{section}'子导航")
+                            time.sleep(2)
+                            self.page.wait_for_load_state("networkidle")
+
+                    except Exception as e:
+                        logger.error(f"点击'{section}'子导航失败: {e}")
+                        # 如果点击失败，尝试重新加载电报页面
+                        continue
+
+                    # 爬取当前板块内容
+                    section_results = self.scrape_section(section)
+                    
+                    # 如果该板块没有符合条件的帖子，记录并继续下一个板块
+                    if len(section_results) == 0:
+                        logger.warning(f"在'{section}'板块未找到符合截止日期 {self.cutoff_date} 之后的帖子")
+                        continue
+                        
+                    total_posts_found += len(section_results)
+                    self.results.extend(section_results)
+                    logger.info(f"'{section}'板块爬取完成，获取到{len(section_results)}条电报")
+                    
+                except Exception as e:
+                    logger.error(f"爬取'{section}'板块时出错: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+            
+            # 结果汇总
+            if total_posts_found == 0:
+                logger.warning(f"未找到任何符合截止日期 {self.cutoff_date} 之后的帖子，请考虑调整日期范围或检查网站结构")
+            else:
+                logger.info(f"共找到 {total_posts_found} 条符合截止日期 {self.cutoff_date} 之后的帖子")
+
+            return self.results
+
+        except Exception as e:
+            logger.error(f"运行电报爬虫时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return self.results 
