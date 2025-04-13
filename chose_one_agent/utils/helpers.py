@@ -184,7 +184,7 @@ def extract_date_time(date_time_text: str) -> Tuple[str, str]:
         logger.error(f"提取日期时间错误: {e}, text='{date_time_text}'")
         return "", ""
 
-def format_output(title: str, date: str, time: str, sentiment: Optional[str] = None) -> str:
+def format_output(title: str, date: str, time: str, sentiment: Optional[str] = None, section: str = "未知板块") -> str:
     """
     格式化输出结果
     
@@ -193,6 +193,7 @@ def format_output(title: str, date: str, time: str, sentiment: Optional[str] = N
         date: 电报日期
         time: 电报时间
         sentiment: 评论情绪（可选）
+        section: 所属板块（可选）
         
     Returns:
         格式化的输出字符串
@@ -200,4 +201,5 @@ def format_output(title: str, date: str, time: str, sentiment: Optional[str] = N
     output = f"标题：{title}\n日期：{date}\n时间：{time}"
     if sentiment:
         output += f"\n评论情绪：{sentiment}"
+    output += f"\n所属板块：{section}"
     return output 

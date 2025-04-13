@@ -46,8 +46,16 @@ def main():
                     date = result.get("date", "")
                     time = result.get("time", "")
                     sentiment = result.get("sentiment", None)
+                    section = result.get("section", "未知板块")
                     
-                    formatted = format_output(title, date, time, sentiment)
+                    # 确保板块信息不为空
+                    if not section or section == "未知板块":
+                        if "看盘" in title or "股" in title or any(code in title for code in ["SH", "SZ", "BJ", "HK"]):
+                            section = "看盘"
+                        elif "公司" in title or "集团" in title or "股份" in title:
+                            section = "公司"
+                    
+                    formatted = format_output(title, date, time, sentiment, section)
                     print(f"\n[{i}] {formatted}")
                     print("-" * 50)
             else:
