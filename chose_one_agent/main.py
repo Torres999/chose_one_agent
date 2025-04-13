@@ -94,8 +94,9 @@ def format_results(results: List[Dict[str, Any]]) -> str:
         date = result.get("date", "")
         time = result.get("time", "")
         sentiment = result.get("sentiment", None)
+        section = result.get("section", "未知板块")
         
-        formatted = format_output(title, date, time, sentiment)
+        formatted = format_output(title, date, time, sentiment, section)
         output_parts.append(formatted)
         output_parts.append("-" * 50)
     

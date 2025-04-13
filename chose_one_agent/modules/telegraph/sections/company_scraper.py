@@ -51,6 +51,10 @@ class CompanyScraper(BaseTelegraphScraper):
             # 使用基类的通用方法爬取板块内容
             results = self.scrape_section(self.section)
             
+            # 确保所有结果都标记为公司板块
+            for result in results:
+                result["section"] = "公司"
+                
             logger.info(f"公司板块爬取完成，获取到 {len(results)} 条电报")
             return results
             
