@@ -161,36 +161,58 @@ class PostExtractor:
             
             logger.info(f"当前页面URL: {current_url}, 识别板块: {section}")
             
-            # 财联社电报项的CSS选择器
-            selectors = [
-                ".telegraph-item",             # 标准电报项
-                "div.box", "div.red-box",      # 框式布局
-                "[class*='telegraph']",        # 包含telegraph的元素
-                "[class*='post']",             # 帖子元素
-                "[class*='item']"              # 通用列表项
-            ]
+            # 根据您提供的信息，查找带有telegraph-list类的元素
+            telegraph_list_selector = "div[class*='telegraph-list']"
+            logger.info(f"使用选择器 '{telegraph_list_selector}' 查找帖子")
             
-            # 尝试通过选择器查找电报项
-            for selector in selectors:
-                elements = page.query_selector_all(selector)
-                if elements and len(elements) > 3:  # 确保选择器找到了足够多的元素
-                    logger.info(f"使用选择器 '{selector}' 找到 {len(elements)} 个电报项")
+            telegraph_elements = page.query_selector_all(telegraph_list_selector)
+            logger.info(f"找到 {len(telegraph_elements)} 个telegraph-list元素")
+            
+            if telegraph_elements and len(telegraph_elements) > 0:
+                for element in telegraph_elements:
+                    # 提取帖子信息
+                    post_info = self.extract_post_info(element)
                     
-                    for element in elements:
-                        # 提取帖子信息
-                        post_info = self.extract_post_info(element)
-                        
-                        # 添加板块信息
-                        post_info["section"] = section
-                        
-                        # 检查是否有效且不重复
-                        if post_info.get("is_valid_post", False) and post_info["title"] not in seen_titles:
-                            posts.append(post_info)
-                            seen_titles.add(post_info["title"])
+                    # 添加板块信息
+                    post_info["section"] = section
                     
-                    # 如果找到了足够多的帖子，停止尝试
-                    if len(posts) >= 5:
-                        break
+                    # 检查是否有效且不重复
+                    if post_info.get("is_valid_post", False) and post_info["title"] not in seen_titles:
+                        posts.append(post_info)
+                        seen_titles.add(post_info["title"])
+            
+            # 如果未找到足够的帖子，尝试使用其他选择器
+            if len(posts) < 5:
+                # 财联社电报项的其他可能选择器
+                selectors = [
+                    ".telegraph-item",             # 标准电报项
+                    "div.box", "div.red-box",      # 框式布局
+                    "[class*='telegraph']",        # 包含telegraph的元素
+                    "[class*='post']",             # 帖子元素
+                    "[class*='item']"              # 通用列表项
+                ]
+                
+                # 尝试通过选择器查找电报项
+                for selector in selectors:
+                    elements = page.query_selector_all(selector)
+                    if elements and len(elements) > 3:  # 确保选择器找到了足够多的元素
+                        logger.info(f"使用选择器 '{selector}' 找到 {len(elements)} 个电报项")
+                        
+                        for element in elements:
+                            # 提取帖子信息
+                            post_info = self.extract_post_info(element)
+                            
+                            # 添加板块信息
+                            post_info["section"] = section
+                            
+                            # 检查是否有效且不重复
+                            if post_info.get("is_valid_post", False) and post_info["title"] not in seen_titles:
+                                posts.append(post_info)
+                                seen_titles.add(post_info["title"])
+                        
+                        # 如果找到了足够多的帖子，停止尝试
+                        if len(posts) >= 5:
+                            break
             
             # 如果常规选择器没有找到足够的帖子，尝试使用更通用的方法
             if len(posts) < 3:
@@ -201,8 +223,7 @@ class PostExtractor:
                     () => {
                         return Array.from(document.querySelectorAll('*')).filter(el => {
                             const text = el.innerText || '';
-                            return text.match(/\\d{4}\\.\\d{2}\\.\\d{2}/) && 
-                                   text.match(/\\d{2}:\\d{2}:\\d{2}/) &&
+                            return text.match(/\\d{2}:\\d{2}:\\d{2}/) && 
                                    (text.includes('评论') || text.includes('分享'));
                         }).map(el => {
                             const rect = el.getBoundingClientRect();

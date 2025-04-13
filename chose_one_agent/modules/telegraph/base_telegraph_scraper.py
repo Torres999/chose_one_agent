@@ -384,6 +384,11 @@ class BaseTelegraphScraper(BaseScraper):
             date_match = re.search(r'(\d{4}\.\d{2}\.\d{2})', element_text)
             if date_match:
                 result["date"] = date_match.group(1)
+            else:
+                # 如果没有找到日期，默认使用当天日期，因为帖子可能是今天发布的
+                today = datetime.datetime.now().strftime("%Y.%m.%d")
+                result["date"] = today
+                logger.debug(f"未找到日期，默认使用当天日期: {today}")
             
             # 尝试从标题格式判断是否为帖子
             is_likely_post = False
@@ -437,12 +442,6 @@ class BaseTelegraphScraper(BaseScraper):
             if "阅读" in element_text or "分享" in element_text:
                 is_likely_post = True
                 
-            # 只有确认是有效帖子，且没有找到日期时，才使用当天日期
-            if is_likely_post and result["date"] == "未知日期":
-                today = datetime.datetime.now().strftime("%Y.%m.%d")
-                result["date"] = today
-                logger.info(f"未找到日期但确认是帖子，使用当天日期: {today}")
-            
             # 验证有效性 - 即使没有日期，只要有时间和标题，也认为是有效帖子
             if is_likely_post and result["time"] != "未知时间" and result["title"] != "未知标题":
                 result["is_valid_post"] = True
@@ -495,12 +494,16 @@ class BaseTelegraphScraper(BaseScraper):
                 if post["date"] != "未知日期":
                     try:
                         post_date = parse_datetime(post["date"], post["time"])
+                        # 添加日志，帮助调试日期比较问题
                         if not is_in_date_range(post_date, self.cutoff_date):
                             outdated_posts_count += 1
-                            logger.debug(f"跳过不符合日期条件的帖子: {post['title']}, 日期: {post['date']} {post['time']}")
+                            logger.debug(f"跳过不符合日期条件的帖子: {post['title']}, 日期: {post['date']} {post['time']}, 截止日期: {self.cutoff_date}")
                             continue
-                    except Exception:
+                        else:
+                            logger.debug(f"符合日期条件的帖子: {post['title']}, 日期: {post['date']} {post['time']}, 截止日期: {self.cutoff_date}")
+                    except Exception as e:
                         # 日期解析失败，仍然处理该帖子
+                        logger.warning(f"日期解析失败，仍然处理该帖子: {post['title']}, 错误: {e}")
                         pass
                 
                 # 记录标题并分析帖子
@@ -554,10 +557,11 @@ class BaseTelegraphScraper(BaseScraper):
                     if post["date"] != "未知日期":
                         try:
                             post_date = parse_datetime(post["date"], post["time"])
+                            # 添加日志，帮助调试日期比较问题
                             if not is_in_date_range(post_date, self.cutoff_date):
                                 outdated_posts_count += 1
                                 consecutive_outdated += 1
-                                logger.debug(f"跳过不符合日期条件的帖子: {post['title']}, 日期: {post['date']} {post['time']}")
+                                logger.debug(f"跳过不符合日期条件的帖子: {post['title']}, 日期: {post['date']} {post['time']}, 截止日期: {self.cutoff_date}")
                                 
                                 # 如果连续出现多个不符合条件的帖子，认为已经到达了时间边界，停止加载
                                 if consecutive_outdated >= max_outdated_posts:
@@ -565,8 +569,11 @@ class BaseTelegraphScraper(BaseScraper):
                                     return section_results
                                 
                                 continue
-                        except Exception:
+                            else:
+                                logger.debug(f"符合日期条件的帖子: {post['title']}, 日期: {post['date']} {post['time']}, 截止日期: {self.cutoff_date}")
+                        except Exception as e:
                             # 日期解析失败，仍然处理该帖子
+                            logger.warning(f"日期解析失败，仍然处理该帖子: {post['title']}, 错误: {e}")
                             pass
                     
                     # 找到符合条件的帖子，重置连续计数
