@@ -4,6 +4,6 @@
 """
 
 # 网站基础URL
-BASE_URL = "https://www.cls.cn"
+BASE_URL = "https://www..cn"
 
 # 可以在这里添加其他配置项 

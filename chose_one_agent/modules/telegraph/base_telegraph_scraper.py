@@ -469,6 +469,11 @@ class BaseTelegraphScraper(BaseScraper):
         processed_titles = set()  # 用于跟踪已处理的帖子标题，避免重复
         post_extractor = PostExtractor()
         
+        # 用于跟踪不符合日期条件的帖子数量
+        outdated_posts_count = 0
+        # 连续出现不符合条件的帖子的最大次数，超过此值则停止加载
+        max_outdated_posts = 5
+        
         try:
             # 获取第一页数据
             posts, _ = post_extractor.extract_posts_from_page(self.page)
@@ -486,11 +491,13 @@ class BaseTelegraphScraper(BaseScraper):
                 if post["title"] in processed_titles:
                     continue
                 
-                # 检查日期是否早于截止日期
+                # 检查日期是否在有效范围内
                 if post["date"] != "未知日期":
                     try:
                         post_date = parse_datetime(post["date"], post["time"])
-                        if post_date < self.cutoff_date:
+                        if not is_in_date_range(post_date, self.cutoff_date):
+                            outdated_posts_count += 1
+                            logger.debug(f"跳过不符合日期条件的帖子: {post['title']}, 日期: {post['date']} {post['time']}")
                             continue
                     except Exception:
                         # 日期解析失败，仍然处理该帖子
@@ -506,6 +513,11 @@ class BaseTelegraphScraper(BaseScraper):
                 
                 section_results.append(result)
             
+            # 如果第一页已经有多个帖子不符合日期条件，可能不需要加载更多
+            if outdated_posts_count >= max_outdated_posts:
+                logger.info(f"第一页已发现{outdated_posts_count}个不符合日期条件的帖子，不再加载更多内容")
+                return section_results
+            
             # 尝试加载更多内容
             load_attempts = 0
             max_attempts = 3
@@ -515,6 +527,7 @@ class BaseTelegraphScraper(BaseScraper):
                 
                 # 尝试加载更多内容
                 if not post_extractor.load_more_posts(self.page):
+                    logger.info("无法加载更多内容，已到达页面底部")
                     break
                 
                 # 提取新加载的帖子
@@ -522,7 +535,11 @@ class BaseTelegraphScraper(BaseScraper):
                 
                 # 如果没有新帖子，停止尝试
                 if not new_posts:
+                    logger.info("加载后未发现新帖子，停止尝试")
                     break
+                
+                # 重置连续不符合条件的帖子计数
+                consecutive_outdated = 0
                 
                 # 处理新帖子
                 for post in new_posts:
@@ -533,15 +550,27 @@ class BaseTelegraphScraper(BaseScraper):
                     if post["title"] in processed_titles:
                         continue
                     
-                    # 检查日期是否早于截止日期
+                    # 检查日期是否在有效范围内
                     if post["date"] != "未知日期":
                         try:
                             post_date = parse_datetime(post["date"], post["time"])
-                            if post_date < self.cutoff_date:
+                            if not is_in_date_range(post_date, self.cutoff_date):
+                                outdated_posts_count += 1
+                                consecutive_outdated += 1
+                                logger.debug(f"跳过不符合日期条件的帖子: {post['title']}, 日期: {post['date']} {post['time']}")
+                                
+                                # 如果连续出现多个不符合条件的帖子，认为已经到达了时间边界，停止加载
+                                if consecutive_outdated >= max_outdated_posts:
+                                    logger.info(f"连续发现{consecutive_outdated}个不符合日期条件的帖子，停止加载更多内容")
+                                    return section_results
+                                
                                 continue
                         except Exception:
                             # 日期解析失败，仍然处理该帖子
                             pass
+                    
+                    # 找到符合条件的帖子，重置连续计数
+                    consecutive_outdated = 0
                     
                     # 记录标题并分析帖子
                     processed_titles.add(post["title"])
@@ -553,7 +582,7 @@ class BaseTelegraphScraper(BaseScraper):
                     
                     section_results.append(result)
             
-            logger.info(f"'{section_name}'板块爬取完成，获取 {len(section_results)} 条结果")
+            logger.info(f"'{section_name}'板块爬取完成，获取 {len(section_results)} 条结果，跳过 {outdated_posts_count} 条不符合日期条件的帖子")
             return section_results
             
         except Exception as e:

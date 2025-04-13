@@ -97,9 +97,7 @@ class TelegraphScraper:
                                 # 确保每个结果都包含板块信息，并且是正确的板块
                                 for result in section_results:
                                     result["section"] = section
-                                    # 在这里打印出来确认板块设置成功
-                                    logger.info(f"设置结果板块为: {section}, 验证结果: {result.get('section', '未设置')}")
-                                
+
                                 self.results.extend(section_results)
                                 logger.info(f"'{section}'板块爬取完成，获取到{len(section_results)}条电报")
                             else:

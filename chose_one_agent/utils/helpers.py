@@ -105,19 +105,16 @@ def is_before_cutoff(post_date: datetime.datetime, cutoff_date: datetime.datetim
 
 def is_in_date_range(post_date: datetime.datetime, cutoff_date: datetime.datetime) -> bool:
     """
-    检查帖子日期是否在截止日期（cutoff_date）到当前时间之间
+    检查帖子日期是否在截止日期之后
     
     Args:
         post_date: 帖子的日期时间
-        cutoff_date: 截止日期时间（范围下限）
+        cutoff_date: 截止日期时间
         
     Returns:
-        如果帖子日期在截止日期和当前时间之间则返回True，否则返回False
+        如果帖子日期大于等于截止日期则返回True，否则返回False
     """
-    # 获取当前时间
-    current_time = datetime.datetime.now()
-    
-    # 帖子日期应该大于等于截止日期且小于等于当前时间
+    # 不管截止日期是过去还是未来，只要帖子日期大于等于截止日期就符合条件
     return post_date >= cutoff_date
 
 def extract_date_time(date_time_text: str) -> Tuple[str, str]:
