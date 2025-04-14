@@ -168,184 +168,191 @@ class BaseTelegraphScraper(BaseScraper):
 
     def navigate_to_telegraph_section(self, section: str) -> bool:
         """
-        导航到电报下的特定板块
-
+        导航到电报的某个子板块
+        
         Args:
-            section: 要导航到的板块，如"公司"或"看盘"
-
+            section: 要导航到的子板块，如"看盘"或"公司"
+            
         Returns:
             是否成功导航到指定板块
         """
+        clicked = False
+        max_retries = 3
+        current_retry = 0
+        
         try:
-            # 第一步：导航到首页
+            # 设置更长的超时时间，处理网络慢的情况
+            page_timeout = 60000  # 60秒超时
+            
+            # 首先导航到网站首页
             logger.info("导航到网站首页")
-            self.page.goto(self.base_url)
-            self.page.wait_for_load_state("networkidle")
-            time.sleep(2)
-
-            # 第二步：点击顶部导航栏中的"电报"按钮
+            try:
+                # 尝试使用更长的超时时间导航到网站
+                self.page.goto(self.base_url, timeout=page_timeout, wait_until="domcontentloaded")
+                
+                # 等待页面加载完成
+                self.page.wait_for_load_state("networkidle", timeout=page_timeout)
+                logger.info("网站首页加载完成")
+            except Exception as e:
+                logger.warning(f"导航到网站首页时出现异常: {e}，尝试直接操作当前页面")
+                # 即使导航失败，也继续尝试操作页面上的元素
+            
+            # 尝试点击顶部导航栏中的"电报"按钮
             logger.info("尝试点击顶部导航栏中的'电报'按钮")
-
-            # 根据日志优化选择器顺序，先使用最可能成功的选择器
-            telegraph_selectors = [
-                "a:has-text('电报')",             # 最通用的选择器放在最前面
-                "nav a:has-text('电报')",
-                "header a:has-text('电报')",
-                ".nav a:has-text('电报')",
-                ".header a:has-text('电报')",
-                "a.nav-item:has-text('电报')"
-            ]
-
-            clicked = False
-            for selector in telegraph_selectors:
-                try:
-                    # 查找电报按钮
-                    elements = self.page.query_selector_all(selector)
-                    logger.info(
-                        f"使用选择器 '{selector}' 找到 {len(elements)} 个可能的电报导航元素")
-
-                    for element in elements:
-                        # 确认是顶部导航中的电报按钮
-                        text = element.inner_text().strip()
-                        if text == "电报":
-                            # 尝试判断是否是首页顶部导航栏中的元素
-                            # 可以检查父元素或位置信息来确认
-                            is_top_nav = element.evaluate(
-                                "el => { const rect = el.getBoundingClientRect(); return rect.top < 100; }")
-                            if is_top_nav:
-                                element.click()
-                                logger.info("成功点击顶部导航栏中的'电报'按钮")
-                                self.page.wait_for_load_state("networkidle")
-                                time.sleep(2)
-                                clicked = True
-                                break
-                except Exception as e:
-                    logger.debug(f"使用选择器'{selector}'点击电报导航时出错: {e}")
-                    continue
-
-                if clicked:
-                    break
-
-            if not clicked:
-                # 如果上述方法都失败，尝试更直接的方法
-                try:
-                    logger.warning("常规方法未能点击'电报'，尝试更直接的点击方法")
-
-                    # 直接使用evaluateHandle执行JavaScript查找并点击
-                    self.page.evaluate("""
-                        () => {
-                            // 尝试查找所有导航链接
-                            const links = Array.from(document.querySelectorAll('a'));
-                            // 查找包含"电报"文本的链接
-                            const telegraphLink = links.find(link => link.textContent.trim() === '电报');
-                            if (telegraphLink) {
-                                // 模拟点击
-                                telegraphLink.click();
-                                return true;
+            
+            # 直接访问电报页面
+            try:
+                self.page.goto(f"{self.base_url}/telegraph", timeout=page_timeout, wait_until="domcontentloaded")
+                self.page.wait_for_load_state("networkidle", timeout=30000)
+                logger.info("直接访问电报页面成功")
+            except Exception as e:
+                logger.warning(f"直接访问电报页面失败: {e}，尝试通过点击导航")
+                # 如果直接访问失败，尝试通过点击导航
+                clicked = False
+                
+                # 增加更多选择器，尝试找到电报导航元素
+                selectors = [
+                    "a:has-text('电报')",
+                    "a.telegraph-link",
+                    "a[href*='telegraph']",
+                    "a.nav-link:has-text('电报')",
+                    "li.nav-item a:has-text('电报')"
+                ]
+                
+                for selector in selectors:
+                    try:
+                        logger.info(f"使用选择器 '{selector}' 查找电报导航元素")
+                        elements = self.page.query_selector_all(selector)
+                        logger.info(f"使用选择器 '{selector}' 找到 {len(elements)} 个可能的电报导航元素")
+                        
+                        if elements and len(elements) > 0:
+                            # 点击第一个匹配的元素
+                            elements[0].click(timeout=10000)
+                            self.page.wait_for_load_state("networkidle", timeout=10000)
+                            clicked = True
+                            logger.info("成功点击顶部导航栏中的'电报'按钮")
+                            break
+                    except Exception as e:
+                        logger.debug(f"使用选择器 '{selector}' 点击电报导航元素失败: {e}")
+                
+                # 如果所有选择器都失败，尝试使用JavaScript点击
+                if not clicked:
+                    try:
+                        logger.info("尝试通过JavaScript点击'电报'导航")
+                        self.page.evaluate("""
+                            () => {
+                                // 尝试各种方法找到电报导航元素
+                                const links = Array.from(document.querySelectorAll('a')).filter(a => 
+                                    a.textContent.includes('电报') || 
+                                    a.href.includes('telegraph')
+                                );
+                                if (links.length > 0) {
+                                    links[0].click();
+                                    return true;
+                                }
+                                return false;
                             }
-                            return false;
-                        }
-                    """)
-
-                    time.sleep(2)
-                    self.page.wait_for_load_state("networkidle")
-
-                    # 检查导航是否成功
-                    current_url = self.page.url
-                    if "telegraph" in current_url.lower():
-                        logger.info("通过JavaScript成功导航到电报页面")
+                        """)
+                        self.page.wait_for_timeout(2000)
                         clicked = True
-                    else:
-                        logger.warning(
-                            f"尝试点击电报后，URL为 {current_url}，可能未成功导航到电报页面")
-                except Exception as e:
-                    logger.error(f"直接点击'电报'失败: {e}")
-
-            if not clicked:
-                # 如果还是失败，尝试直接导航到电报页面
-                logger.warning("无法通过点击导航到电报页面，尝试直接访问电报URL")
-                try:
-                    telegraph_url = f"{self.base_url}/telegraph"
-                    self.page.goto(telegraph_url)
-                    self.page.wait_for_load_state("networkidle")
-                    time.sleep(2)
-                    logger.info(f"直接导航到电报页面URL: {telegraph_url}")
-                    clicked = True
-                except Exception as e:
-                    logger.error(f"直接导航到电报URL失败: {e}")
-                    return False
-
-            # 第三步：在电报页面上点击子导航（如"公司"或"看盘"）
+                    except Exception as e:
+                        logger.warning(f"通过JavaScript点击'电报'导航失败: {e}")
+            
+            # 检查是否在电报页面
+            current_url = self.page.url
+            if "telegraph" in current_url or "电报" in current_url:
+                logger.info(f"已经在电报页面: {current_url}")
+            else:
+                logger.warning(f"可能未能导航到电报页面，当前URL: {current_url}")
+            
+            # 在电报页面上尝试点击子导航（如看盘、公司等）
             logger.info(f"尝试在电报页面上点击'{section}'子导航")
-
-            # 根据日志优化选择器顺序
-            sub_section_selectors = [
-                f"a:has-text('{section}')",          # 最通用的选择器放在最前面
+            clicked = False
+            
+            # 直接处理从截图看到的页面结构
+            selectors = [
+                f"a:has-text('{section}')",
                 f".tabs a:has-text('{section}')",
                 f".sub-nav a:has-text('{section}')",
                 f"nav.secondary-nav a:has-text('{section}')",
                 f"[role='tablist'] a:has-text('{section}')",
                 f"a.tab:has-text('{section}')"
             ]
-
-            clicked = False
-            for selector in sub_section_selectors:
+            
+            for selector in selectors:
                 try:
                     elements = self.page.query_selector_all(selector)
-                    logger.info(
-                        f"使用选择器 '{selector}' 找到 {len(elements)} 个可能的'{section}'子导航元素")
-
-                    for element in elements:
-                        text = element.inner_text().strip()
-                        if text == section:
-                            # 尝试确认这是电报页面下的子导航
-                            element.click()
-                            logger.info(f"成功点击电报页面下的'{section}'子导航")
-                            self.page.wait_for_load_state("networkidle")
-                            time.sleep(2)
+                    if elements and len(elements) > 0:
+                        # 尝试点击第一个匹配的元素
+                        try:
+                            elements[0].click()
+                            self.page.wait_for_load_state("networkidle", timeout=5000)
                             clicked = True
+                            logger.info(f"成功点击电报页面下的'{section}'子导航")
+                            
+                            # 确认是否成功切换到该板块
+                            active_tabs = self.page.query_selector_all("[role='tab'][aria-selected='true'], .tab.active, .selected-tab")
+                            for tab in active_tabs:
+                                tab_text = tab.inner_text().strip()
+                                if tab_text == section:
+                                    logger.info(f"确认已切换到'{section}'板块")
+                                    return True
                             break
+                        except Exception as e:
+                            logger.debug(f"点击'{section}'选项卡时出错: {e}")
                 except Exception as e:
-                    logger.debug(f"使用选择器'{selector}'点击'{section}'子导航时出错: {e}")
-                    continue
-
-                if clicked:
-                    break
-
+                    logger.debug(f"使用选择器查找'{section}'选项卡时出错: {e}")
+            
+            # 如果常规方法未能点击，尝试更直接的点击方法
             if not clicked:
-                # 如果上述方法都失败，尝试更直接的方法
+                logger.warning(f"常规方法未能点击'{section}'子导航，尝试更直接的点击方法")
+                
+                # 尝试通过JavaScript点击子导航
+                logger.info(f"尝试通过JavaScript点击'{section}'子导航")
                 try:
-                    logger.warning(f"常规方法未能点击'{section}'子导航，尝试更直接的点击方法")
-
-                    # 直接使用evaluateHandle执行JavaScript查找并点击
-                    self.page.evaluate(f"""
+                    js_result = self.page.evaluate(f"""
                         () => {{
-                            // 尝试查找所有导航链接
-                            const links = Array.from(document.querySelectorAll('a'));
-                            // 查找包含"{section}"文本的链接
-                            const sectionLink = links.find(link => link.textContent.trim() === '{section}');
-                            if (sectionLink) {{
-                                // 模拟点击
-                                sectionLink.click();
+                            const sectionText = '{section}';
+                            // 尝试查找各种可能的导航元素
+                            const elements = Array.from(document.querySelectorAll('a, div[role="tab"], .tab, button')).filter(el => 
+                                el.textContent.trim() === sectionText ||
+                                el.textContent.trim().includes(sectionText)
+                            );
+                            
+                            if (elements.length > 0) {{
+                                // 点击第一个匹配的元素
+                                elements[0].click();
                                 return true;
                             }}
                             return false;
                         }}
                     """)
-
-                    time.sleep(2)
-                    self.page.wait_for_load_state("networkidle")
-                    logger.info(f"尝试通过JavaScript点击'{section}'子导航")
-                    clicked = True
+                    
+                    if js_result:
+                        clicked = True
+                        logger.info(f"通过JavaScript成功点击'{section}'子导航")
+                        self.page.wait_for_timeout(2000)  # 等待页面响应
                 except Exception as e:
-                    logger.error(f"直接点击'{section}'子导航失败: {e}")
-
+                    logger.error(f"JavaScript点击'{section}'子导航失败: {e}")
+            
+            # 如果还是无法点击，但我们已经在电报页面，可以考虑直接解析页面内容
+            if not clicked and (("telegraph" in self.page.url) or ("电报" in self.page.url)):
+                logger.warning(f"未能点击'{section}'子导航，但已在电报页面，将直接解析页面内容")
+                return True  # 返回True，让程序继续尝试解析页面内容
+            
             return clicked
 
         except Exception as e:
             logger.error(f"导航到电报{section}板块时出错: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            
+            # 如果是最后一次重试失败，但我们已经加载了某个页面，仍然返回True
+            # 让程序继续尝试解析可能存在的内容
+            if current_retry >= max_retries - 1 and self.page.url and len(self.page.url) > 0:
+                logger.warning(f"导航失败但已加载页面，将尝试解析当前页面内容: {self.page.url}")
+                return True
+                
             return False
 
     def extract_post_info(self, element) -> Dict[str, Any]:

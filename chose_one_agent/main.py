@@ -11,7 +11,7 @@ from chose_one_agent.utils.helpers import format_output
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(message)s',
     handlers=[
         logging.FileHandler("chose_one_agent.log"),
         logging.StreamHandler(sys.stdout)
