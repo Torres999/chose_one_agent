@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class CompanyScraper(BaseTelegraphScraper):
     """公司板块电报爬虫，专门处理公司板块的电报内容"""
 
-    def __init__(self, cutoff_date, headless=True, debug=False):
+    def __init__(self, cutoff_date, headless=True, debug=False, sentiment_analyzer_type="snownlp", deepseek_api_key=None):
         """
         初始化公司电报爬虫
         
@@ -19,8 +19,10 @@ class CompanyScraper(BaseTelegraphScraper):
             cutoff_date: 截止日期，爬虫只会获取该日期到当前时间范围内的电报
             headless: 是否使用无头模式运行浏览器
             debug: 是否启用调试模式
+            sentiment_analyzer_type: 情感分析器类型，可选值："snownlp"或"deepseek"
+            deepseek_api_key: DeepSeek API密钥，当sentiment_analyzer_type为"deepseek"时必须提供
         """
-        super().__init__(cutoff_date, headless, debug)
+        super().__init__(cutoff_date, headless, debug, sentiment_analyzer_type, deepseek_api_key)
         self.section = "公司"
         
         # 公司板块特有的选择器
@@ -99,4 +101,16 @@ class CompanyScraper(BaseTelegraphScraper):
             
         except Exception as e:
             logger.error(f"公司板块提取帖子信息时出错: {e}")
-            return post_info 
+            return post_info
+            
+    def analyze_post(self, post_info: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        分析帖子内容，添加到CompanyScraper以修复继承问题
+        
+        Args:
+            post_info: 包含帖子信息的字典
+            
+        Returns:
+            包含分析结果的字典
+        """
+        return super().analyze_post(post_info) 

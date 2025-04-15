@@ -3,10 +3,15 @@ import datetime
 import logging
 import sys
 import traceback
+import os
 from typing import List, Dict, Any
 
 from chose_one_agent.modules.telegraph import TelegraphScraper
 from chose_one_agent.utils.helpers import format_output
+from dotenv import load_dotenv
+
+# 加载环境变量
+load_dotenv()
 
 # 配置日志
 logging.basicConfig(
@@ -52,6 +57,19 @@ def parse_args():
         default=False,
         help="是否启用调试模式"
     )
+    parser.add_argument(
+        "--sentiment-analyzer",
+        type=str,
+        choices=["snownlp", "deepseek"],
+        default="snownlp",
+        help="选择情感分析器类型，snownlp使用本地分析，deepseek使用DeepSeek API"
+    )
+    parser.add_argument(
+        "--deepseek-api-key",
+        type=str,
+        default=None,
+        help="DeepSeek API密钥，当选择deepseek情感分析器时必需。也可通过DEEPSEEK_API_KEY环境变量设置"
+    )
     return parser.parse_args()
 
 def parse_cutoff_date(cutoff_date_str: str) -> datetime.datetime:
@@ -93,16 +111,35 @@ def format_results(results: List[Dict[str, Any]]) -> str:
         title = result.get("title", "无标题")
         date = result.get("date", "")
         time = result.get("time", "")
-        sentiment = result.get("sentiment", None)
         section = result.get("section", "未知板块")
         
-        formatted = format_output(title, date, time, sentiment, section)
+        # 收集所有情感分析相关的字段
+        sentiment_info = {
+            "sentiment_score": result.get("sentiment_score", 3),
+            "sentiment_label": result.get("sentiment_label", "中性"),
+            "has_comments": result.get("has_comments", False),
+            "comments": result.get("comments", []),
+            "sentiment_analysis": result.get("sentiment_analysis", "")
+        }
+        
+        # 如果还存在旧格式的sentiment字段，优先使用
+        old_sentiment = result.get("sentiment", None)
+        if old_sentiment is not None:
+            sentiment = old_sentiment
+        else:
+            sentiment = sentiment_info
+        
+        # 获取Deepseek分析结果（如果有）
+        deepseek_analysis = result.get("deepseek_analysis", None)
+        
+        formatted = format_output(title, date, time, sentiment, section, deepseek_analysis)
         output_parts.append(formatted)
         output_parts.append("-" * 50)
     
     return "\n".join(output_parts)
 
-def run_telegraph_scraper(cutoff_date: datetime.datetime, sections: List[str], headless: bool, debug: bool = False) -> List[Dict[str, Any]]:
+def run_telegraph_scraper(cutoff_date: datetime.datetime, sections: List[str], headless: bool, debug: bool = False, 
+                          sentiment_analyzer: str = "snownlp", deepseek_api_key: str = None) -> List[Dict[str, Any]]:
     """
     运行电报爬虫
     
@@ -111,6 +148,8 @@ def run_telegraph_scraper(cutoff_date: datetime.datetime, sections: List[str], h
         sections: 要爬取的电报子板块列表
         headless: 是否使用无头模式
         debug: 是否启用调试模式
+        sentiment_analyzer: 情感分析器类型，"snownlp"或"deepseek"
+        deepseek_api_key: DeepSeek API密钥
         
     Returns:
         分析结果列表
@@ -127,6 +166,16 @@ def run_telegraph_scraper(cutoff_date: datetime.datetime, sections: List[str], h
         processed_sections = ["看盘", "公司"]
         
     logger.info(f"开始爬取电报，截止日期: {cutoff_date}, 子板块: {processed_sections}")
+    logger.info(f"使用情感分析器: {sentiment_analyzer}")
+    
+    # 检查DeepSeek API密钥
+    if sentiment_analyzer == "deepseek":
+        deepseek_api_key = deepseek_api_key or os.environ.get("DEEPSEEK_API_KEY")
+        if not deepseek_api_key:
+            logger.warning("使用DeepSeek情感分析器但未提供API密钥，将回退至SnowNLP")
+            sentiment_analyzer = "snownlp"
+        else:
+            logger.info("已设置DeepSeek API密钥")
     
     # 如果是调试模式，设置日志级别为DEBUG
     if debug:
@@ -134,7 +183,13 @@ def run_telegraph_scraper(cutoff_date: datetime.datetime, sections: List[str], h
     
     try:
         # 不使用上下文管理器，直接创建实例
-        scraper = TelegraphScraper(cutoff_date=cutoff_date, headless=headless, debug=debug)
+        scraper = TelegraphScraper(
+            cutoff_date=cutoff_date, 
+            headless=headless, 
+            debug=debug,
+            sentiment_analyzer_type=sentiment_analyzer,
+            deepseek_api_key=deepseek_api_key
+        )
         results = scraper.run(processed_sections)
         logger.info(f"电报爬取完成，共处理了 {len(results)} 条电报")
         return results
@@ -161,7 +216,14 @@ def main():
     
     try:
         # 爬取电报内容
-        results = run_telegraph_scraper(cutoff_date, args.sections, args.headless, args.debug)
+        results = run_telegraph_scraper(
+            cutoff_date, 
+            args.sections, 
+            args.headless, 
+            args.debug,
+            args.sentiment_analyzer,
+            args.deepseek_api_key
+        )
         
         # 格式化并输出结果
         formatted_output = format_results(results)

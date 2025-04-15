@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 ChoseOne财经网站分析智能体启动脚本
 """

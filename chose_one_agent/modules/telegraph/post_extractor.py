@@ -155,7 +155,7 @@ class PostExtractor:
             # 如果元素包含"阅读"或"分享"，更可能是帖子
             if "阅读" in element_text or "分享" in element_text:
                 is_likely_post = True
-            
+
             # 验证有效性 - 即使没有日期，只要有时间和标题，也认为是有效帖子
             if is_likely_post and result["time"] != "未知时间" and result["title"] != "未知标题":
                 result["is_valid_post"] = True
@@ -176,7 +176,7 @@ class PostExtractor:
                 result["section"] = "公司"
                 if result["title"] != "未知标题":
                     result["is_valid_post"] = True
-                
+            
             return result
             
         except Exception as e:
@@ -237,11 +237,9 @@ class PostExtractor:
             logger.info(f"当前页面URL: {current_url}, 识别板块: {section}")
             
             # ===== 策略1: 直接查找单个电报项 =====
-            # 这是最可靠的方法，直接查找具有时间格式的元素
-            # 不依赖特定类名，适用于大多数页面结构变化
             all_posts_elements = []
             
-            # 使用更直接的方法提取电报项 - 查找包含时间格式的元素
+            # 查找包含时间格式和电报相关特征的元素
             time_elements = page.query_selector_all("div, article, section, li")
             for element in time_elements:
                 try:
@@ -255,8 +253,7 @@ class PostExtractor:
                     
             logger.info(f"通过时间格式直接找到 {len(all_posts_elements)} 个可能的电报项")
             
-            # 直接按时间格式提取的元素可能有重叠，筛选出最合适的元素
-            # 排除太大的容器（可能是整个列表）和太小的元素（可能只是时间标签）
+            # 筛选出最合适的元素，排除太大的容器和太小的元素
             filtered_elements = []
             for element in all_posts_elements:
                 try:
@@ -270,8 +267,8 @@ class PostExtractor:
                         };
                     }""", element)
                     
-                    # 电报项通常有适中的高度
-                    if rect["height"] > 20 and rect["height"] < 200 and rect["text"] > 20 and rect["text"] < 1000:
+                    # 电报项通常有适中的高度和文本长度
+                    if (20 < rect["height"] < 200) and (20 < rect["text"] < 1000):
                         filtered_elements.append(element)
                 except Exception:
                     continue
@@ -418,7 +415,7 @@ class PostExtractor:
                         
                         # 添加板块信息
                         post_info["section"] = section
-                        
+                    
                         if post_info.get("is_valid_post", False) and post_info["title"] not in seen_titles:
                             posts.append(post_info)
                             seen_titles.add(post_info["title"])
@@ -434,22 +431,20 @@ class PostExtractor:
     
     def load_more_posts(self, page) -> bool:
         """
-        加载更多帖子
+        尝试加载更多帖子
         
         Args:
-            page: 页面对象
+            page: Playwright页面对象
             
         Returns:
-            是否成功加载更多
+            是否成功加载了更多内容
         """
         try:
-            # 记录加载前的页面高度和内容数量
+            # 记录当前页面高度
             old_height = page.evaluate("document.body.scrollHeight")
             
-            # 1. 尝试点击"加载更多"按钮
+            # 1. 尝试找到并点击"加载更多"按钮
             load_more_selectors = [
-                "button:has-text('加载更多')",
-                "a:has-text('加载更多')",
                 ".load-more", 
                 "[class*='more']"
             ]

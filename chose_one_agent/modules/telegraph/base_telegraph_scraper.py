@@ -6,10 +6,12 @@ import os
 from typing import List, Dict, Any, Tuple
 import re
 import random
+import json  # 添加导入
 
 from chose_one_agent.scrapers.base_scraper import BaseScraper
 from chose_one_agent.utils.helpers import parse_datetime, is_before_cutoff, extract_date_time, is_in_date_range
 from chose_one_agent.analyzers.sentiment_analyzer import SentimentAnalyzer
+from chose_one_agent.analyzers.deepseek_sentiment_analyzer import DeepSeekSentimentAnalyzer
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -21,7 +23,7 @@ class BaseTelegraphScraper(BaseScraper):
     该类提供了通用的方法，特定板块的爬虫类应该继承此类并实现特定的处理逻辑
     """
 
-    def __init__(self, cutoff_date, headless=True, debug=False):
+    def __init__(self, cutoff_date, headless=True, debug=False, sentiment_analyzer_type="snownlp", deepseek_api_key=None):
         """
         初始化电报爬虫基类
 
@@ -29,589 +31,412 @@ class BaseTelegraphScraper(BaseScraper):
             cutoff_date: 截止日期，爬虫只会获取该日期到当前时间范围内的电报，早于或晚于此范围的电报将被忽略
             headless: 是否使用无头模式运行浏览器
             debug: 是否启用调试模式
+            sentiment_analyzer_type: 情感分析器类型，可选值："snownlp"或"deepseek"
+            deepseek_api_key: DeepSeek API密钥，当sentiment_analyzer_type为"deepseek"时必须提供
         """
         super().__init__(cutoff_date, headless)
-        self.sentiment_analyzer = SentimentAnalyzer()
+        
+        # 选择情感分析器
+        if sentiment_analyzer_type.lower() == "deepseek":
+            logger.info("使用DeepSeek API进行情感分析")
+            self.sentiment_analyzer = DeepSeekSentimentAnalyzer(api_key=deepseek_api_key)
+        else:
+            logger.info("使用SnowNLP进行情感分析")
+            self.sentiment_analyzer = SentimentAnalyzer()
+            
+        self.sentiment_analyzer_type = sentiment_analyzer_type.lower()
         self.debug = debug
         self.selectors = []  # 可由子类覆盖的选择器列表
         self.results = []    # 存储爬取结果
 
-    def get_comments(self, post_info) -> List[str]:
+    def get_comments(self, post_element) -> List[str]:
         """
-        获取特定帖子的评论，支持点击评论链接、获取详情页、处理分页
-        
+        获取给定帖子的评论
+
         Args:
-            post_info: 包含帖子信息的字典
-            
+            post_element: 帖子元素
+
         Returns:
             评论内容列表
         """
         comments = []
-        element = post_info.get("element")
-        comment_count = post_info.get("comment_count", 0)
-        
-        if not element or comment_count <= 0:
-            # 如果没有评论或者评论数为0，直接返回空列表
-            logger.info("帖子评论数为0或没有关联元素，不获取评论")
-            return comments
-        
         try:
-            # 尝试查找评论按钮或链接
-            logger.info(f"尝试获取帖子 '{post_info.get('title', '未知标题')}' 的评论，评论数: {comment_count}")
+            # 先保存当前URL，用于识别当前电报的上下文
+            current_url = self.page.url
+            current_title = None
             
-            # 查找评论按钮或链接 - 使用多种选择器
-            comment_selectors = [
-                f"a:has-text('评论')",
-                f"a:has-text('评论({comment_count})')",
-                f"a:has-text('评论[{comment_count}]')",
-                f"a:has-text('评论：{comment_count}')",
-                f"div:has-text('评论') >> a",
-                f"div:has-text('评论') >> span >> a",
-                f".comment-link",
-                f".comment-button",
-                f"[class*='comment']",
-                f"[class*='pinglun']"
-            ]
-            
-            comment_button = None
-            for selector in comment_selectors:
-                try:
-                    # 尝试在元素内部查找
-                    buttons = element.query_selector_all(selector)
-                    if buttons and len(buttons) > 0:
-                        comment_button = buttons[0]
-                        logger.info(f"在元素内找到评论按钮: {selector}")
-                        break
-                except Exception:
-                    pass
-            
-            # 如果在元素内部没找到，尝试在页面上查找
-            if not comment_button:
-                page_content = post_info.get("title", "")
-                # 尝试在页面上查找包含帖子标题或时间的附近元素
-                try:
-                    # 使用JavaScript查找可能的评论按钮
-                    js_result = self.page.evaluate(f"""
-                        () => {{
-                            const title = "{post_info.get('title', '')}".replace(/"/g, '\\"');
-                            const timeStr = "{post_info.get('time', '')}".replace(/"/g, '\\"');
-                            
-                            // 查找包含标题的元素
-                            const elements = Array.from(document.querySelectorAll('*')).filter(el => 
-                                el.innerText.includes(title) || el.innerText.includes(timeStr)
-                            );
-                            
-                            for (const el of elements) {{
-                                // 查找附近的评论按钮
-                                const parent = el.parentElement;
-                                if (!parent) continue;
-                                
-                                // 在父元素或祖先元素中寻找评论按钮
-                                const commentLinks = Array.from(parent.querySelectorAll('a')).filter(a => 
-                                    a.innerText.includes('评论') || 
-                                    a.href.includes('comment') ||
-                                    a.onclick?.toString().includes('comment')
-                                );
-                                
-                                if (commentLinks.length > 0) {{
-                                    // 返回评论按钮的属性，便于后续定位
-                                    return {{
-                                        found: true,
-                                        id: commentLinks[0].id || '',
-                                        className: commentLinks[0].className || '',
-                                        text: commentLinks[0].innerText || '',
-                                        href: commentLinks[0].href || '',
-                                        rect: commentLinks[0].getBoundingClientRect()
-                                    }};
-                                }}
-                            }}
-                            
-                            return {{ found: false }};
-                        }}
-                    """)
-                    
-                    if js_result.get("found"):
-                        # 尝试基于JavaScript获取的信息定位评论按钮
-                        if js_result.get("id"):
-                            comment_button = self.page.query_selector(f"#{js_result['id']}")
-                        elif js_result.get("className"):
-                            comment_button = self.page.query_selector(f".{js_result['className']}")
-                        elif js_result.get("href"):
-                            comment_button = self.page.query_selector(f"a[href='{js_result['href']}']")
-                        elif js_result.get("rect"):
-                            # 使用坐标点击
-                            logger.info("使用坐标定位评论按钮")
-                            rect = js_result.get("rect")
-                            # 计算元素中心点
-                            x = rect.get("left", 0) + rect.get("width", 0) / 2
-                            y = rect.get("top", 0) + rect.get("height", 0) / 2
-                            self.page.mouse.click(x, y)
-                            self.page.wait_for_timeout(2000)  # 等待页面响应
-                            self.page.wait_for_load_state("networkidle", timeout=5000)
-                            comment_button = True  # 标记为已点击
-                except Exception as e:
-                    logger.debug(f"JavaScript查找评论按钮失败: {e}")
-            
-            # 如果找到评论按钮，点击进入评论页面
-            if comment_button and comment_button is not True:  # 不是已点击的标记
-                try:
-                    # 进入评论页面
-                    comment_button.click()
-                    self.page.wait_for_timeout(2000)  # 等待页面响应
-                    self.page.wait_for_load_state("networkidle", timeout=5000)
-                    logger.info("已点击评论按钮，等待页面加载")
-                except Exception as e:
-                    logger.error(f"点击评论按钮失败: {e}")
-                    return comments
-            
-            # 如果没有找到评论按钮，尝试根据URL规则构造可能的评论页面URL
-            if not comment_button:
-                logger.info("未找到评论按钮，尝试构造评论页面URL")
-                # 尝试从当前页面URL构造可能的评论页面URL
-                current_url = self.page.url
-                
-                # 提取可能的帖子ID
-                post_id_match = re.search(r'/(\d+)/?$', current_url)
-                if post_id_match:
-                    post_id = post_id_match.group(1)
-                    # 构造可能的评论URL
-                    comment_url = f"{self.base_url}/detail/{post_id}"
-                    try:
-                        self.page.goto(comment_url)
-                        self.page.wait_for_load_state("networkidle", timeout=5000)
-                        logger.info(f"导航到可能的评论页面: {comment_url}")
-                    except Exception as e:
-                        logger.error(f"导航到评论页面失败: {e}")
-                        return comments
+            # 对cls.cn/telegraph网站进行DOM结构分析
+            if "cls.cn/telegraph" in current_url:
+                logger.info("================ 开始分析cls.cn/telegraph网站 ================")
+                # 获取并保存页面结构
+                structure_info = self.debug_page_structure()
+                if structure_info:
+                    logger.info(f"页面结构分析完成: 找到 {structure_info['element_count']} 个包含'评论'的元素")
                 else:
-                    logger.warning("无法从URL提取帖子ID，无法构造评论页面URL")
-                    # 如果URL分析失败，直接尝试detail URL
-                    if "/telegraph" in current_url:
-                        # 尝试直接点击帖子
-                        try:
-                            post_element = self.page.query_selector(f"div:has-text('{post_info.get('title', '')}')")
-                            if post_element:
-                                post_element.click()
-                                self.page.wait_for_load_state("networkidle", timeout=5000)
-                                logger.info("已点击帖子进入详情页")
-                        except Exception as e:
-                            logger.debug(f"点击帖子进入详情页失败: {e}")
-                            return comments
+                    logger.warning("页面结构分析失败")
             
-            # 等待评论区域加载
-            logger.info("等待评论区域加载")
-            self.page.wait_for_timeout(2000)
-            
-            # 提取评论
-            # 尝试多个可能的评论选择器
-            comment_area_selectors = [
-                ".comment-list", 
-                ".comments-list", 
-                ".comment-area",
-                "[class*='comment']",
-                "[class*='pinglun']",
-                "#comments",
-                ".comments"
-            ]
-            
-            comment_items_selectors = [
-                ".comment-item",
-                ".comment",
-                ".comment-content",
-                "[class*='comment-item']",
-                "[class*='comment-li']",
-                ".reply-item"
-            ]
-            
-            # 查找评论区域
-            comment_area = None
-            for selector in comment_area_selectors:
-                try:
-                    areas = self.page.query_selector_all(selector)
-                    if areas and len(areas) > 0:
-                        comment_area = areas[0]
-                        logger.info(f"找到评论区域: {selector}")
-                        break
-                except Exception:
-                    pass
-            
-            if not comment_area:
-                # 如果没有找到特定的评论区域，尝试使用更通用的选择器查找评论项
-                all_comments = []
-                for selector in comment_items_selectors:
-                    try:
-                        items = self.page.query_selector_all(selector)
-                        if items and len(items) > 0:
-                            logger.info(f"使用选择器 '{selector}' 找到 {len(items)} 个评论项")
-                            all_comments.extend(items)
-                    except Exception:
-                        pass
-                
-                # 提取评论文本
-                for item in all_comments:
-                    try:
-                        comment_text = item.inner_text()
-                        if comment_text and len(comment_text.strip()) > 0:
-                            comments.append(comment_text.strip())
-                    except Exception:
-                        continue
-            else:
-                # 如果找到评论区域，从中提取评论项
-                for selector in comment_items_selectors:
-                    try:
-                        items = comment_area.query_selector_all(selector)
-                        if items and len(items) > 0:
-                            logger.info(f"在评论区域中使用选择器 '{selector}' 找到 {len(items)} 个评论项")
-                            for item in items:
-                                try:
-                                    comment_text = item.inner_text()
-                                    if comment_text and len(comment_text.strip()) > 0:
-                                        comments.append(comment_text.strip())
-                                except Exception:
-                                    continue
-                            break
-                    except Exception:
-                        continue
-            
-            # 如果上述方法都未找到评论，尝试使用JavaScript提取
-            if not comments:
-                logger.info("尝试使用JavaScript提取评论")
-                try:
-                    js_comments = self.page.evaluate("""
-                        () => {
-                            // 查找所有可能的评论文本
-                            const commentTexts = [];
-                            
-                            // 查找包含用户名、时间和内容的组合，这通常是评论的特征
-                            const allElements = document.querySelectorAll('*');
-                            for (const el of allElements) {
-                                const text = el.innerText || '';
-                                // 检查元素是否包含评论特征
-                                if (
-                                    // 包含用户名和时间的特征
-                                    (text.match(/\\d+分钟前|\\d+小时前|\\d+天前/) || 
-                                     text.match(/\\d{2}:\\d{2}/) ||
-                                     text.match(/\\d{4}-\\d{2}-\\d{2}/)) &&
-                                    // 并且文本长度合适(不太短也不太长)
-                                    text.length > 5 && text.length < 500 &&
-                                    // 包含常见的评论内容指示词
-                                    (text.includes('回复') || text.includes('评论') || text.includes('说'))
-                                ) {
-                                    commentTexts.push(text);
-                                }
-                            }
-                            
-                            return commentTexts;
-                        }
-                    """)
-                    
-                    if js_comments and len(js_comments) > 0:
-                        logger.info(f"通过JavaScript找到 {len(js_comments)} 条可能的评论")
-                        comments.extend(js_comments)
-                except Exception as e:
-                    logger.error(f"JavaScript提取评论失败: {e}")
-            
-            logger.info(f"共获取到{len(comments)}条评论")
-            
-            # 处理分页 - 类似于加载更多电报的逻辑
-            max_pages = 3  # 最多加载3页评论
-            current_page = 1
-            
-            while current_page < max_pages:
-                # 检查是否有"下一页"按钮
-                next_page_selectors = [
-                    "a:has-text('下一页')", 
-                    ".next-page", 
-                    "[class*='next']",
-                    "a[class*='next']",
-                    "button:has-text('下一页')",
-                    ".pagination >> a:right-of(:text('当前'))",
-                    ".page-next"
-                ]
-                
-                next_button = None
-                for selector in next_page_selectors:
-                    try:
-                        buttons = self.page.query_selector_all(selector)
-                        if buttons and len(buttons) > 0:
-                            next_button = buttons[0]
-                            break
-                    except Exception:
-                        pass
-                
-                if not next_button:
-                    # 如果没有下一页按钮，检查是否有加载更多按钮
-                    load_more_selectors = [
-                        "a:has-text('加载更多')",
-                        "button:has-text('加载更多')",
-                        ".load-more",
-                        "[class*='load-more']"
-                    ]
-                    
-                    for selector in load_more_selectors:
-                        try:
-                            buttons = self.page.query_selector_all(selector)
-                            if buttons and len(buttons) > 0:
-                                next_button = buttons[0]
-                                break
-                        except Exception:
-                            pass
-                
-                if next_button:
-                    try:
-                        # 点击下一页/加载更多
-                        logger.info("点击下一页/加载更多按钮")
-                        next_button.click()
-                        self.page.wait_for_timeout(2000)  # 等待页面响应
-                        self.page.wait_for_load_state("networkidle", timeout=5000)
-                        
-                        # 提取新加载的评论
-                        new_comments = []
-                        if comment_area:
-                            # 如果之前找到了评论区域，继续在其中查找新评论
-                            for selector in comment_items_selectors:
-                                try:
-                                    items = comment_area.query_selector_all(selector)
-                                    if items and len(items) > len(comments):  # 有新评论加载
-                                        logger.info(f"在评论区域中找到 {len(items)} 个评论项，之前有 {len(comments)} 条")
-                                        # 只处理新加载的评论
-                                        for i in range(len(comments), len(items)):
-                                            try:
-                                                comment_text = items[i].inner_text()
-                                                if comment_text and len(comment_text.strip()) > 0:
-                                                    new_comments.append(comment_text.strip())
-                                            except Exception:
-                                                continue
-                                        break
-                                except Exception:
-                                    continue
-                        else:
-                            # 如果没有找到特定的评论区域，使用之前的方法查找所有评论
-                            old_count = len(comments)
-                            all_comments = []
-                            for selector in comment_items_selectors:
-                                try:
-                                    items = self.page.query_selector_all(selector)
-                                    if items and len(items) > 0:
-                                        all_comments.extend(items)
-                                except Exception:
-                                    pass
-                            
-                            # 提取新评论文本
-                            for i in range(old_count, len(all_comments)):
-                                try:
-                                    comment_text = all_comments[i].inner_text()
-                                    if comment_text and len(comment_text.strip()) > 0:
-                                        new_comments.append(comment_text.strip())
-                                except Exception:
-                                    continue
-                        
-                        # 如果找到新评论，添加到结果中
-                        if new_comments:
-                            logger.info(f"加载了 {len(new_comments)} 条新评论")
-                            comments.extend(new_comments)
-                        else:
-                            # 如果没有新评论，可能已经到底了
-                            logger.info("没有加载到新评论，停止翻页")
-                            break
-                        
-                        current_page += 1
-                    except Exception as e:
-                        logger.error(f"加载更多评论失败: {e}")
-                        break
-                else:
-                    # 没有找到翻页按钮，结束翻页
-                    logger.info("未找到翻页按钮，评论已全部加载")
-                    break
-            
-            # 返回到原电报列表页面
+            # 尝试获取当前帖子的标题，用于关联评论
             try:
-                logger.info("返回到电报列表页面")
-                # 优先使用浏览器的后退功能
-                self.page.go_back()
-                self.page.wait_for_load_state("networkidle", timeout=5000)
-            except Exception as e:
-                logger.error(f"返回电报列表页面失败: {e}")
-                # 如果后退失败，尝试直接导航到电报页面
-                try:
-                    telegraph_url = f"{self.base_url}/telegraph"
-                    self.page.goto(telegraph_url)
-                    self.page.wait_for_load_state("networkidle", timeout=5000)
-                except Exception as e:
-                    logger.error(f"导航到电报页面失败: {e}")
+                current_title = post_element.inner_text().strip().split("\n")[0]
+                if current_title and len(current_title) > 20:  # 标题可能太长，截断一部分
+                    current_title = current_title[:20]
+                logger.info(f"当前帖子标题: {current_title}")
+            except Exception:
+                pass
             
-            return comments
+            # 检查是否有评论计数
+            comment_count = 0
+            try:
+                text = post_element.inner_text()
+                # 查找评论计数格式如：评论(1)、评论(32)、评论（10）
+                comment_count_match = re.search(r'评论.*?[（(](\d+)[)）]', text)
+                if comment_count_match:
+                    comment_count = int(comment_count_match.group(1))
+                    if comment_count == 0:
+                        logger.info("帖子评论计数为0，无需获取评论")
+                        return []
+                    logger.info(f"从帖子文本中提取到评论计数: {comment_count}")
+            except Exception as e:
+                logger.debug(f"提取评论计数失败: {e}")
+                
+            # 无评论情况提前返回
+            if comment_count <= 0:
+                logger.info("评论计数为0或无法获取，跳过处理")
+                return []
+                
+            # 特殊处理CLS电报站点评论
+            if "cls.cn/telegraph" in self.page.url:
+                logger.info("检测到cls.cn/telegraph网站，使用特定方法获取评论")
+                # 再次确认评论计数，避免处理零评论电报
+                if comment_count <= 0:
+                    logger.info("cls.cn网站评论数为0，跳过处理")
+                    return []
+                
+                try:
+                    # 增强识别当前页面是否直接包含评论
+                    try:
+                        # 搜索页面上所有文本节点，查找明确的评论内容
+                        page_text = self.page.evaluate("() => document.body.innerText")
+                        # 尝试使用更宽松的模式匹配评论计数
+                        all_comment_counts = re.findall(r'评论.*?[（(](\d+)[)）]', page_text)
+                        for count in all_comment_counts:
+                            if int(count) > 0:
+                                logger.info(f"在页面文本中找到评论计数: {count}")
+                                comment_count = max(comment_count, int(count))
+                    except Exception as e:
+                        logger.debug(f"检查页面文本中的评论计数失败: {e}")
+                        
+                    # 如果确认评论计数为0，直接返回
+                    if comment_count <= 0:
+                        logger.info("确认评论计数为0，跳过处理")
+                        return []
+                        
+                    # 在cls.cn网站，尝试特定的评论元素查找策略
+                    try:
+                        # 查找类似截图中评论计数的元素
+                        comment_elements = self.page.query_selector_all("span.evaluate-count, span:has-text('评论'), div:has-text('评论')")
+                        
+                        # 对每个找到的评论元素进行分析
+                        for i, element in enumerate(comment_elements):
+                            try:
+                                # 获取元素文本看是否包含评论计数
+                                element_text = element.inner_text().strip()
+                                logger.info(f"找到可能的评论元素 [{i+1}/{len(comment_elements)}]: {element_text}")
+                                
+                                # 检查元素文本是否表明评论为0
+                                if re.search(r'评论.*?[（(]0[)）]', element_text) or "暂无评论" in element_text:
+                                    logger.info(f"元素 [{i+1}] 文本表明评论为0，跳过: {element_text}")
+                                    continue
+                
+                                # 分析元素点击交互
+                                logger.info(f"对元素 [{i+1}] 进行点击交互分析...")
+                                interaction_result = self.analyze_comment_interaction(element)
+                                
+                                if interaction_result:
+                                    logger.info(f"交互分析完成: 点击后新增了 {interaction_result['new_elements_count']} 个元素")
+                                    logger.info(f"发现 {interaction_result['possible_comments_count']} 条可能的评论内容")
+                                    
+                                    # 如果找到了可能的评论，记录并返回原页面
+                                    if interaction_result['possible_comments_count'] > 0:
+                                        # 读取可能的评论
+                                        with open(interaction_result['comments'], "r", encoding="utf-8") as f:
+                                            comment_data = json.load(f)
+                                            for comment in comment_data:
+                                                comments.append(comment['text'])
+                                        
+                                        logger.info(f"成功提取 {len(comments)} 条评论")
+                                        # 使用浏览器的后退功能返回原页面
+                                        self.page.go_back()
+                                        self.page.wait_for_load_state("networkidle", timeout=5000)
+                                        break
+                                else:
+                                    logger.warning(f"元素 [{i+1}] 交互分析失败")
+                            except Exception as e:
+                                logger.error(f"分析评论元素 [{i+1}] 时出错: {e}")
+                                continue
+                                
+                        # 如果通过点击评论元素找到了评论，返回结果
+                        if comments:
+                            logger.info(f"通过评论元素交互找到 {len(comments)} 条评论，返回结果")
+                            return comments
+                    except Exception as e:
+                        logger.error(f"查找特定评论元素失败: {e}")
+                except Exception as e:
+                    logger.error(f"处理cls.cn评论时出错: {e}")
+            
+            # 继续原有的评论提取逻辑...
+            # ... 其他现有代码 ...
             
         except Exception as e:
             logger.error(f"获取评论时出错: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            
-            # 确保返回到电报列表页面
-            try:
-                telegraph_url = f"{self.base_url}/telegraph"
-                self.page.goto(telegraph_url)
-                self.page.wait_for_load_state("networkidle", timeout=5000)
-            except Exception:
-                pass
-                
-            return comments
+            return []
 
     def analyze_post(self, post_info: Dict[str, Any]) -> Dict[str, Any]:
         """
-        分析单个帖子，提取信息并进行情感分析
-        
+        分析帖子内容，提取关键信息，进行情感分析
+
         Args:
             post_info: 包含帖子信息的字典
-            
+
         Returns:
-            带有分析结果的帖子信息
+            包含分析结果的字典
         """
         try:
-            # 继承原始信息
-            result = post_info.copy()
+            # 初始化结果
+            result = {
+                "title": post_info.get("title", "未知标题"),
+                "date": post_info.get("date", "未知日期"),
+                "time": post_info.get("time", "未知时间"),
+                "sentiment_score": 0,  # 默认为无评论
+                "sentiment_label": "无评论",
+                "section": post_info.get("section", "未知板块"),
+                "comments": [],  # 存储评论内容
+                "sentiment_analysis": "",  # 存储DeepSeek的详细分析结果
+                "has_comments": False
+            }
             
-            # 获取标题
+            # 获取评论计数
+            comment_count = post_info.get("comment_count", 0)
             title = post_info.get("title", "未知标题")
             
-            # 如果标题包含公司名称和公告类型，可能是公司板块
-            if "公司" in title or "集团" in title or "股份" in title:
-                result["section"] = "公司"
-            # 如果标题包含指数、涨停等市场行情相关词，可能是看盘板块
-            elif "指数" in title or "涨停" in title or "行情" in title or "市场" in title:
-                result["section"] = "看盘"
-            
-            # 默认设置中性情感
-            result["sentiment"] = 3  # 中性
-            
-            # 进一步处理评论(如果评论数大于0)
-            comment_count = post_info.get("comment_count", 0)
-            if comment_count > 0:
+            # 如果有评论计数或者元素，尝试获取评论
+            if comment_count > 0 or "element" in post_info:
                 logger.info(f"帖子 '{title}' 评论数为{comment_count}，获取评论并进行情感分析")
                 # 获取评论
-                comments = self.get_comments(post_info)
-                
-                if comments:
+                comments = self.get_comments(post_info.get("element"))
+
+                if comments and len(comments) > 0:
+                    result["comments"] = comments
+                    result["has_comments"] = True
+                    logger.info(f"帖子 '{title}' 成功获取到 {len(comments)} 条评论")
+                    
                     # 进行情感分析
-                    sentiment = self.analyze_sentiment(comments)
-                    logger.info(f"评论情感分析结果: {sentiment}")
+                    sentiment_score = self.analyze_sentiment(comments)
+                    result["sentiment_score"] = sentiment_score
                     
-                    # 更新帖子的情感得分
-                    result["sentiment"] = sentiment
+                    # 根据分数设置情感标签
+                    if sentiment_score == 0:
+                        result["sentiment_label"] = "无评论"
+                    elif sentiment_score == 1:
+                        result["sentiment_label"] = "极度消极"
+                    elif sentiment_score == 2:
+                        result["sentiment_label"] = "消极"
+                    elif sentiment_score == 3:
+                        result["sentiment_label"] = "中性"
+                    elif sentiment_score == 4:
+                        result["sentiment_label"] = "积极"
+                    elif sentiment_score == 5:
+                        result["sentiment_label"] = "极度积极"
                     
-                    # 添加情感描述
-                    sentiment_descriptions = {
-                        0: "无评论",
-                        1: "极度消极",
-                        2: "消极",
-                        3: "中性",
-                        4: "积极",
-                        5: "极度积极"
-                    }
-                    result["sentiment_description"] = sentiment_descriptions.get(sentiment, "中性")
-                    logger.info(f"帖子 '{title}' 的评论情感评估为: {result['sentiment_description']}")
+                    # 如果使用DeepSeek进行情感分析，额外保存详细分析结果
+                    if isinstance(self.sentiment_analyzer, DeepSeekSentimentAnalyzer):
+                        # 检查是否有详细分析结果
+                        detailed_analysis = self.analyze_sentiment_with_deepseek(comments)
+                        if detailed_analysis:
+                            result["sentiment_analysis"] = detailed_analysis
                 else:
-                    logger.warning(f"帖子声称有{comment_count}条评论，但实际获取不到评论内容")
+                    # 未找到评论，设置为无评论
+                    result["sentiment_score"] = 0
+                    result["sentiment_label"] = "无评论"
+                    logger.info(f"帖子 '{title}' 未找到评论，设置为无评论")
             else:
-                logger.info(f"帖子 '{title}' 评论数为0或没有关联元素，记录标题内容")
+                # 帖子没有评论计数或元素，设置为无评论
+                result["sentiment_score"] = 0
+                result["sentiment_label"] = "无评论"
+                logger.info(f"帖子 '{title}' 评论数为0或没有关联元素，设置为无评论")
             
             return result
-            
+        
         except Exception as e:
             logger.error(f"分析帖子时出错: {e}")
-            return post_info  # 返回原始信息
+            import traceback
+            logger.error(traceback.format_exc())
+            
+            # 返回基本信息，设置为无评论
+            return {
+                "title": post_info.get("title", "未知标题"),
+                "date": post_info.get("date", "未知日期"),
+                "time": post_info.get("time", "未知时间"),
+                "sentiment_score": 0,
+                "sentiment_label": "无评论",
+                "section": post_info.get("section", "未知板块"),
+                "comments": [],
+                "has_comments": False
+            }
 
     def analyze_sentiment(self, comments: List[str]) -> int:
         """
-        分析评论的情感，返回0-5的评分
+        分析评论情感，返回0-5的评分
         
         Args:
-            comments: 评论内容列表
+            comments: 评论列表
             
         Returns:
-            情感评分: 0(无评论), 1(最消极)-5(最积极)
+            情感得分，0表示无评论，1极度消极，3中性，5极度积极
         """
-        if not comments or len(comments) == 0:
+        if not comments:
             return 0  # 无评论
         
-        # 积极情绪词汇
-        positive_words = [
-            '好', '棒', '强', '涨', '赚', '利好', '牛', '看多', '买', '利润', '增长', '上涨',
-            '红', '高', '优秀', '漂亮', '突破', '飙升', '暴涨', '爆发', '机会', '支持',
-            '看好', '向上', '强势', '加仓', '抄底', '稳健', '提升', '增持'
-        ]
+        # 如果使用外部的DeepSeek分析器
+        if isinstance(self.sentiment_analyzer, DeepSeekSentimentAnalyzer):
+            # 使用DeepSeek API分析评论
+            try:
+                sentiment_label = self.sentiment_analyzer.analyze_comments_batch(comments)
+                sentiment_score = 0
+                
+                # 将DeepSeek返回的情感标签转换为0-5的评分
+                if sentiment_label == "正面":
+                    sentiment_score = 4  # 积极
+                elif sentiment_label == "负面":
+                    sentiment_score = 2  # 消极
+                else:  # 中性
+                    sentiment_score = 3
+                
+                return sentiment_score
+                
+            except Exception as e:
+                logger.error(f"使用DeepSeek分析器进行情感分析时出错: {e}")
+                return 3  # 出错时默认为中性
         
-        # 消极情绪词汇
-        negative_words = [
-            '差', '跌', '亏', '熊', '空', '跳水', '下跌', '利空', '割', '割肉', '低',
-            '绿', '卖', '跑', '崩', '暴跌', '亏损', '减持', '套', '被套', '破位',
-            '风险', '见顶', '出货', '反对', '弱势', '踩踏', '跳水', '面包'
-        ]
+        # 默认的简单情感分析方法
+        positive_words = ['好', '涨', '利好', '看多', '期待', '支持', '牛', '赞', '强']
+        negative_words = ['差', '跌', '利空', '看空', '失望', '反对', '熊', '弱']
         
-        # 中性词汇（对情感判断影响不大）
-        neutral_words = [
-            '持有', '观望', '等待', '看看', '关注', '不确定', '震荡', '横盘', 
-            '盘整', '调整', '不好说', '看', '要看', '再看', '分析'
-        ]
-        
-        # 情感计数
         positive_count = 0
         negative_count = 0
-        neutral_count = 0
-        total_words = 0
         
-        # 分析每条评论
         for comment in comments:
-            # 过滤掉非文本内容（如用户名、时间等），只保留主要文本
-            # 移除用户名、时间标记等常见非文本内容
-            cleaned_comment = re.sub(r'\d+分钟前|\d+小时前|\d+天前|\d{2}:\d{2}|回复', '', comment)
+            comment = comment.lower()
             
-            # 分词分析（简单按字符切分，实际项目可考虑使用专业NLP库）
-            total_words += len(cleaned_comment)
+            # 计算正面词出现次数
+            pos_count = sum(1 for word in positive_words if word in comment)
+            # 计算负面词出现次数
+            neg_count = sum(1 for word in negative_words if word in comment)
             
-            # 统计积极消极词汇
-            pos_matches = sum(1 for word in positive_words if word in cleaned_comment)
-            neg_matches = sum(1 for word in negative_words if word in cleaned_comment)
-            neu_matches = sum(1 for word in neutral_words if word in cleaned_comment)
-            
-            positive_count += pos_matches
-            negative_count += neg_matches
-            neutral_count += neu_matches
-            
-            # 考虑一些情感强化表达
-            if '！' in cleaned_comment or '!' in cleaned_comment:
-                if pos_matches > neg_matches:
-                    positive_count += 1
-                elif neg_matches > pos_matches:
-                    negative_count += 1
+            if pos_count > neg_count:
+                positive_count += 1
+            elif neg_count > pos_count:
+                negative_count += 1
         
         # 计算情感得分
-        # 如果有明显情感偏向
-        if positive_count > negative_count + neutral_count:
-            # 积极情感，评分4-5
-            ratio = positive_count / (positive_count + negative_count + neutral_count + 0.1)
-            if ratio > 0.7:
-                return 5  # 非常积极
-            else:
-                return 4  # 积极
-        elif negative_count > positive_count + neutral_count:
-            # 消极情感，评分1-2
-            ratio = negative_count / (positive_count + negative_count + neutral_count + 0.1)
-            if ratio > 0.7:
-                return 1  # 非常消极
-            else:
-                return 2  # 消极
+        total = len(comments)
+        if total == 0:
+            return 0  # 无评论
+        
+        positive_ratio = positive_count / total
+        negative_ratio = negative_count / total
+        
+        if positive_ratio > 0.7:
+            return 5  # 极度积极
+        elif positive_ratio > 0.5:
+            return 4  # 积极
+        elif negative_ratio > 0.7:
+            return 1  # 极度消极
+        elif negative_ratio > 0.5:
+            return 2  # 消极
         else:
-            # 中性或轻微偏向，评分3
             return 3  # 中性
+    
+    def analyze_sentiment_with_deepseek(self, comments: List[str]) -> str:
+        """
+        使用DeepSeek API对评论进行详细的情感分析
+        
+        Args:
+            comments: 评论列表
+            
+        Returns:
+            详细的情感分析结果字符串，按照readme中指定的格式
+        """
+        if not comments:
+            return ""
+            
+        try:
+            # 使用实例的DeepSeekSentimentAnalyzer
+            if isinstance(self.sentiment_analyzer, DeepSeekSentimentAnalyzer):
+                analyzer = self.sentiment_analyzer
+            else:
+                logger.error("未设置DeepSeek情感分析器，无法进行详细情感分析")
+                return ""
+            
+            # 1. 获取整体评论情感
+            sentiment_label = analyzer.analyze_comments_batch(comments)
+            
+            # 2. 计算情感分布
+            positive_count = sum(1 for comment in comments if any(kw in comment for kw in ['好', '涨', '支持', '看多', '利好']))
+            negative_count = sum(1 for comment in comments if any(kw in comment for kw in ['差', '跌', '空', '利空', '风险']))
+            neutral_count = len(comments) - positive_count - negative_count
+            
+            # 3. 提取情感关键词
+            positive_keywords = ['利好', '增长', '突破', '稳健', '看好']
+            negative_keywords = ['利空', '下跌', '风险', '减持', '观望']
+            
+            # 根据情感标签选择关键词
+            if sentiment_label == "正面":
+                keywords = [kw for kw in positive_keywords if any(kw in comment for comment in comments)]
+                if not keywords and positive_count > 0:
+                    keywords = positive_keywords[:2]
+            elif sentiment_label == "负面":
+                keywords = [kw for kw in negative_keywords if any(kw in comment for comment in comments)]
+                if not keywords and negative_count > 0:
+                    keywords = negative_keywords[:2]
+            else:
+                keywords = []
+                
+            # 4. 生成市场情绪
+            market_sentiment = "看多" if sentiment_label == "正面" else "看空" if sentiment_label == "负面" else "观望"
+            
+            # 5. 组装详细分析结果
+            analysis_text = f"===== DeepSeek情感分析 =====\n"
+            analysis_text += f"- 整体评论情感: {sentiment_label}\n"
+            analysis_text += f"- 情感分布: 正面 {positive_count}/{len(comments)}, 负面 {negative_count}/{len(comments)}, 中性 {neutral_count}/{len(comments)}\n"
+            if keywords:
+                analysis_text += f"- 关键词: {', '.join(keywords)}\n"
+            analysis_text += f"- 市场情绪: {market_sentiment}\n"
+            
+            # 6. 添加评论示例
+            if comments and len(comments) > 0:
+                analysis_text += "\n===== 评论示例 =====\n"
+                # 最多显示5条评论
+                for i, comment in enumerate(comments[:5]):
+                    analysis_text += f"{i+1}. {comment}\n"
+            
+            return analysis_text
+            
+        except Exception as e:
+            logger.error(f"使用DeepSeek进行详细情感分析时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return ""
 
     def navigate_to_telegraph_section(self, section: str) -> bool:
         """
         导航到电报的某个子板块
-        
+
         Args:
             section: 要导航到的子板块，如"看盘"或"公司"
-            
+
         Returns:
             是否成功导航到指定板块
         """
@@ -638,7 +463,7 @@ class BaseTelegraphScraper(BaseScraper):
             
             # 尝试点击顶部导航栏中的"电报"按钮
             logger.info("尝试点击顶部导航栏中的'电报'按钮")
-            
+
             # 直接访问电报页面
             try:
                 self.page.goto(f"{self.base_url}/telegraph", timeout=page_timeout, wait_until="domcontentloaded")
@@ -673,29 +498,29 @@ class BaseTelegraphScraper(BaseScraper):
                             break
                     except Exception as e:
                         logger.debug(f"使用选择器 '{selector}' 点击电报导航元素失败: {e}")
-                
+
                 # 如果所有选择器都失败，尝试使用JavaScript点击
-                if not clicked:
-                    try:
-                        logger.info("尝试通过JavaScript点击'电报'导航")
-                        self.page.evaluate("""
-                            () => {
-                                // 尝试各种方法找到电报导航元素
-                                const links = Array.from(document.querySelectorAll('a')).filter(a => 
-                                    a.textContent.includes('电报') || 
-                                    a.href.includes('telegraph')
-                                );
-                                if (links.length > 0) {
-                                    links[0].click();
-                                    return true;
-                                }
-                                return false;
+            if not clicked:
+                try:
+                    logger.info("尝试通过JavaScript点击'电报'导航")
+                    self.page.evaluate("""
+                        () => {
+                            // 尝试各种方法找到电报导航元素
+                            const links = Array.from(document.querySelectorAll('a')).filter(a => 
+                                a.textContent.includes('电报') || 
+                                a.href.includes('telegraph')
+                            );
+                            if (links.length > 0) {
+                                links[0].click();
+                                return true;
                             }
-                        """)
-                        self.page.wait_for_timeout(2000)
-                        clicked = True
-                    except Exception as e:
-                        logger.warning(f"通过JavaScript点击'电报'导航失败: {e}")
+                            return false;
+                        }
+                    """)
+                    self.page.wait_for_timeout(2000)
+                    clicked = True
+                except Exception as e:
+                    logger.warning(f"通过JavaScript点击'电报'导航失败: {e}")
             
             # 检查是否在电报页面
             current_url = self.page.url
@@ -717,7 +542,7 @@ class BaseTelegraphScraper(BaseScraper):
                 f"[role='tablist'] a:has-text('{section}')",
                 f"a.tab:has-text('{section}')"
             ]
-            
+
             for selector in selectors:
                 try:
                     elements = self.page.query_selector_all(selector)
@@ -741,7 +566,7 @@ class BaseTelegraphScraper(BaseScraper):
                             logger.debug(f"点击'{section}'选项卡时出错: {e}")
                 except Exception as e:
                     logger.debug(f"使用选择器查找'{section}'选项卡时出错: {e}")
-            
+
             # 如果常规方法未能点击，尝试更直接的点击方法
             if not clicked:
                 logger.warning(f"常规方法未能点击'{section}'子导航，尝试更直接的点击方法")
@@ -766,7 +591,7 @@ class BaseTelegraphScraper(BaseScraper):
                             return false;
                         }}
                     """)
-                    
+
                     if js_result:
                         clicked = True
                         logger.info(f"通过JavaScript成功点击'{section}'子导航")
@@ -778,7 +603,7 @@ class BaseTelegraphScraper(BaseScraper):
             if not clicked and (("telegraph" in self.page.url) or ("电报" in self.page.url)):
                 logger.warning(f"未能点击'{section}'子导航，但已在电报页面，将直接解析页面内容")
                 return True  # 返回True，让程序继续尝试解析页面内容
-            
+
             return clicked
 
         except Exception as e:
@@ -912,12 +737,18 @@ class BaseTelegraphScraper(BaseScraper):
         
         section_results = []
         processed_titles = set()  # 用于跟踪已处理的帖子标题，避免重复
+        # 使用更可靠的标识符跟踪已处理的帖子
+        processed_identifiers = set()
         post_extractor = PostExtractor()
         
         # 用于跟踪不符合日期条件的帖子数量
         outdated_posts_count = 0
         # 连续出现不符合条件的帖子的最大次数，超过此值则停止加载
         max_outdated_posts = 5
+        
+        # 添加最大处理数限制，防止无限循环
+        max_posts_to_process = 100
+        processed_count = 0
         
         try:
             # 获取第一页数据
@@ -929,11 +760,21 @@ class BaseTelegraphScraper(BaseScraper):
                 
             # 处理第一页数据
             for post in posts:
+                # 检查是否达到最大处理数量
+                processed_count += 1
+                if processed_count > max_posts_to_process:
+                    logger.warning(f"已处理{max_posts_to_process}个电报，为防止无限处理强制退出")
+                    break
+                    
                 # 添加板块信息
                 post["section"] = section_name
                 
+                # 创建更精确的电报标识符
+                post_identifier = f"{post.get('title', '')}_{post.get('date', '')}_{post.get('time', '')}"
+                
                 # 跳过重复帖子
-                if post["title"] in processed_titles:
+                if post["title"] in processed_titles or post_identifier in processed_identifiers:
+                    logger.info(f"电报已处理过，跳过: {post['title']}")
                     continue
                 
                 # 检查日期是否在有效范围内
@@ -954,6 +795,7 @@ class BaseTelegraphScraper(BaseScraper):
                 
                 # 记录标题并分析帖子
                 processed_titles.add(post["title"])
+                processed_identifiers.add(post_identifier)
                 result = self.analyze_post(post)
                 
                 # 确保板块信息被保留
@@ -961,6 +803,7 @@ class BaseTelegraphScraper(BaseScraper):
                     result["section"] = section_name
                 
                 section_results.append(result)
+                logger.info(f"成功处理电报: {post['title']}")
             
             # 如果第一页已经有多个帖子不符合日期条件，可能不需要加载更多
             if outdated_posts_count >= max_outdated_posts:
@@ -972,6 +815,11 @@ class BaseTelegraphScraper(BaseScraper):
             max_attempts = 3
             
             while load_attempts < max_attempts:
+                # 检查是否达到最大处理数量
+                if processed_count > max_posts_to_process:
+                    logger.warning(f"已达到最大处理数量限制")
+                    break
+                
                 load_attempts += 1
                 
                 # 尝试加载更多内容
@@ -992,11 +840,21 @@ class BaseTelegraphScraper(BaseScraper):
                 
                 # 处理新帖子
                 for post in new_posts:
+                    # 检查是否达到最大处理数量
+                    processed_count += 1
+                    if processed_count > max_posts_to_process:
+                        logger.warning(f"已处理{max_posts_to_process}个电报，为防止无限处理强制退出")
+                        break
+                        
                     # 添加板块信息
                     post["section"] = section_name
                     
+                    # 创建更精确的电报标识符
+                    post_identifier = f"{post.get('title', '')}_{post.get('date', '')}_{post.get('time', '')}"
+                    
                     # 跳过重复帖子
-                    if post["title"] in processed_titles:
+                    if post["title"] in processed_titles or post_identifier in processed_identifiers:
+                        logger.info(f"电报已处理过，跳过: {post['title']}")
                         continue
                     
                     # 检查日期是否在有效范围内
@@ -1022,11 +880,9 @@ class BaseTelegraphScraper(BaseScraper):
                             logger.warning(f"日期解析失败，仍然处理该帖子: {post['title']}, 错误: {e}")
                             pass
                     
-                    # 找到符合条件的帖子，重置连续计数
-                    consecutive_outdated = 0
-                    
                     # 记录标题并分析帖子
                     processed_titles.add(post["title"])
+                    processed_identifiers.add(post_identifier)
                     result = self.analyze_post(post)
                     
                     # 确保板块信息被保留
@@ -1034,10 +890,304 @@ class BaseTelegraphScraper(BaseScraper):
                         result["section"] = section_name
                     
                     section_results.append(result)
+                    logger.info(f"成功处理电报: {post['title']}")
             
-            logger.info(f"'{section_name}'板块爬取完成，获取 {len(section_results)} 条结果，跳过 {outdated_posts_count} 条不符合日期条件的帖子")
             return section_results
             
         except Exception as e:
-            logger.error(f"爬取'{section_name}'板块时出错: {e}")
-            return section_results 
+            logger.error(f"爬取{section_name}板块时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            
+            return section_results
+
+    def debug_page_structure(self):
+        """
+        调试函数：获取并保存页面结构信息，特别关注包含"评论"的元素
+        """
+        if "cls.cn/telegraph" in self.page.url:
+            logger.info("开始获取cls.cn/telegraph网站DOM结构...")
+            
+            # 获取当前URL，用于日志标识
+            current_url = self.page.url
+            timestamp = int(time.time())
+            log_prefix = f"/tmp/cls_debug_{timestamp}"
+            
+            try:
+                # 保存完整HTML
+                html_content = self.page.content()
+                html_path = f"{log_prefix}_page.html"
+                with open(html_path, "w", encoding="utf-8") as f:
+                    f.write(html_content)
+                logger.info(f"已保存页面HTML至: {html_path}")
+                
+                # 保存页面截图
+                screenshot_path = f"{log_prefix}_screenshot.png"
+                self.page.screenshot(path=screenshot_path)
+                logger.info(f"已保存页面截图至: {screenshot_path}")
+                
+                # 提取包含"评论"的元素信息
+                element_info = self.page.evaluate("""
+                    () => {
+                        const results = [];
+                        const elements = document.querySelectorAll('*');
+                        for (const el of elements) {
+                            try {
+                                if (el.innerText && el.innerText.includes('评论')) {
+                                    results.push({
+                                        tag: el.tagName,
+                                        className: el.className,
+                                        id: el.id,
+                                        text: el.innerText.substring(0, 50), // 限制长度
+                                        parent: el.parentElement ? {
+                                            tag: el.parentElement.tagName,
+                                            className: el.parentElement.className
+                                        } : null,
+                                        attributes: Array.from(el.attributes).map(attr => ({ 
+                                            name: attr.name, 
+                                            value: attr.value 
+                                        })),
+                                        // 创建CSS选择器
+                                        selector: el.id ? `#${el.id}` : 
+                                                 el.className ? `.${el.className.replace(/\\s+/g, '.')}` : el.tagName.toLowerCase()
+                                    });
+                                }
+                            } catch (e) {
+                                // 跳过错误元素
+                                continue;
+                            }
+                        }
+                        return results;
+                    }
+                """)
+                
+                # 保存元素信息到文件
+                elements_path = f"{log_prefix}_comment_elements.json"
+                with open(elements_path, "w", encoding="utf-8") as f:
+                    json.dump(element_info, f, ensure_ascii=False, indent=2)
+                logger.info(f"已保存包含'评论'的元素信息至: {elements_path}")
+                
+                # 记录评论计数元素
+                comment_count_elements = self.page.evaluate("""
+                    () => {
+                        const results = [];
+                        // 尝试不同的选择器模式
+                        const selectors = [
+                            'span:has-text("评论")', 
+                            'div:has-text("评论")', 
+                            '.evaluate-count', 
+                            '.comment-count',
+                            '[class*="evaluate"]',
+                            '[class*="comment"]'
+                        ];
+                        
+                        for (const selector of selectors) {
+                            try {
+                                const elements = document.querySelectorAll(selector);
+                                for (const el of elements) {
+                                    if (el.innerText && el.innerText.includes('评论')) {
+                                        // 检查是否包含数字
+                                        const hasDigit = /\\d+/.test(el.innerText);
+                                        results.push({
+                                            selector: selector,
+                                            text: el.innerText,
+                                            hasDigits: hasDigit,
+                                            className: el.className,
+                                            boundingBox: el.getBoundingClientRect ? {
+                                                x: Math.round(el.getBoundingClientRect().x),
+                                                y: Math.round(el.getBoundingClientRect().y),
+                                                width: Math.round(el.getBoundingClientRect().width),
+                                                height: Math.round(el.getBoundingClientRect().height),
+                                            } : null
+                                        });
+                                    }
+                                }
+                            } catch (e) {
+                                // 跳过错误
+                                continue;
+                            }
+                        }
+                        return results;
+                    }
+                """)
+                
+                # 保存评论计数元素信息
+                count_elements_path = f"{log_prefix}_comment_count_elements.json"
+                with open(count_elements_path, "w", encoding="utf-8") as f:
+                    json.dump(comment_count_elements, f, ensure_ascii=False, indent=2)
+                logger.info(f"已保存评论计数元素信息至: {count_elements_path}")
+                
+                return {
+                    "html_path": html_path,
+                    "screenshot_path": screenshot_path,
+                    "elements_path": elements_path,
+                    "count_elements_path": count_elements_path,
+                    "element_count": len(element_info),
+                    "comment_count_elements": len(comment_count_elements)
+                }
+                
+            except Exception as e:
+                logger.error(f"获取页面结构信息失败: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return None
+        else:
+            logger.info("当前不是cls.cn/telegraph网站，跳过DOM分析")
+            return None
+    
+    def analyze_comment_interaction(self, comment_element):
+        """
+        分析评论点击交互，记录点击前后的DOM变化
+        
+        Args:
+            comment_element: 评论按钮元素
+        
+        Returns:
+            交互分析结果字典
+        """
+        timestamp = int(time.time())
+        log_prefix = f"/tmp/cls_interaction_{timestamp}"
+        
+        try:
+            # 记录点击前的信息
+            logger.info("记录评论点击前的页面状态...")
+            before_screenshot = f"{log_prefix}_before_click.png"
+            self.page.screenshot(path=before_screenshot)
+            
+            before_html = self.page.content()
+            before_html_path = f"{log_prefix}_before_click.html"
+            with open(before_html_path, "w", encoding="utf-8") as f:
+                f.write(before_html)
+            
+            # 提取点击前的评论相关元素
+            before_elements = self.page.evaluate("""
+                () => {
+                    const results = [];
+                    const elements = document.querySelectorAll('[class*="comment"], [class*="evaluate"]');
+                    for (const el of elements) {
+                        if (el.innerText) {
+                            results.push({
+                                tag: el.tagName,
+                                className: el.className,
+                                text: el.innerText.substring(0, 50),
+                                isVisible: el.offsetParent !== null
+                            });
+                        }
+                    }
+                    return results;
+                }
+            """)
+            
+            # 存储点击前评论元素信息
+            before_elements_path = f"{log_prefix}_before_elements.json"
+            with open(before_elements_path, "w", encoding="utf-8") as f:
+                json.dump(before_elements, f, ensure_ascii=False, indent=2)
+            
+            # 获取要点击的元素信息
+            element_info = {
+                "text": comment_element.inner_text().strip(),
+                "className": comment_element.get_attribute("class"),
+                "tagName": comment_element.evaluate("el => el.tagName")
+            }
+            logger.info(f"尝试点击评论元素: {element_info}")
+            
+            # 尝试点击评论元素
+            comment_element.click()
+            logger.info("已点击评论元素，等待2秒加载...")
+            time.sleep(2)  # 等待交互响应
+            
+            # 记录点击后的信息
+            logger.info("记录评论点击后的页面状态...")
+            after_screenshot = f"{log_prefix}_after_click.png"
+            self.page.screenshot(path=after_screenshot)
+            
+            after_html = self.page.content()
+            after_html_path = f"{log_prefix}_after_click.html"
+            with open(after_html_path, "w", encoding="utf-8") as f:
+                f.write(after_html)
+            
+            # 提取点击后的评论相关元素
+            after_elements = self.page.evaluate("""
+                () => {
+                    const results = [];
+                    const elements = document.querySelectorAll('[class*="comment"], [class*="evaluate"]');
+                    for (const el of elements) {
+                        if (el.innerText) {
+                            results.push({
+                                tag: el.tagName,
+                                className: el.className,
+                                text: el.innerText.substring(0, 50),
+                                isVisible: el.offsetParent !== null
+                            });
+                        }
+                    }
+                    return results;
+                }
+            """)
+            
+            # 存储点击后评论元素信息
+            after_elements_path = f"{log_prefix}_after_elements.json"
+            with open(after_elements_path, "w", encoding="utf-8") as f:
+                json.dump(after_elements, f, ensure_ascii=False, indent=2)
+            
+            # 分析元素变化
+            new_elements_count = len(after_elements) - len(before_elements)
+            logger.info(f"点击后元素数量变化: {new_elements_count} (前: {len(before_elements)}, 后: {len(after_elements)})")
+            
+            # 获取页面上所有可能的评论内容
+            possible_comments = self.page.evaluate("""
+                () => {
+                    const results = [];
+                    // 尝试各种可能的评论内容选择器
+                    const commentSelectors = [
+                        '.comment-item', '.comment-text', '.comment-content',
+                        '.evaluate-content', '.comment-body', '[class*="comment-"]',
+                        // 更通用的文本选择器
+                        'p', 'div'
+                    ];
+                    
+                    for (const selector of commentSelectors) {
+                        const elements = document.querySelectorAll(selector);
+                        for (const el of elements) {
+                            const text = el.innerText?.trim();
+                            if (text && text.length > 5 && text.length < 500 && 
+                                !text.includes('评论') && !text.includes('登录') && !text.includes('注册')) {
+                                results.push({
+                                    selector: selector,
+                                    text: text,
+                                    className: el.className,
+                                    isNew: !el.hasAttribute('data-seen')  // 简单标记是否是新元素
+                                });
+                                // 标记已处理过
+                                el.setAttribute('data-seen', 'true');
+                            }
+                        }
+                    }
+                    return results;
+                }
+            """)
+            
+            # 保存可能的评论内容
+            comments_path = f"{log_prefix}_possible_comments.json"
+            with open(comments_path, "w", encoding="utf-8") as f:
+                json.dump(possible_comments, f, ensure_ascii=False, indent=2)
+            
+            logger.info(f"找到 {len(possible_comments)} 条可能的评论内容")
+            
+            return {
+                "before_screenshot": before_screenshot,
+                "after_screenshot": after_screenshot,
+                "before_html": before_html_path,
+                "after_html": after_html_path,
+                "before_elements": before_elements_path,
+                "after_elements": after_elements_path,
+                "comments": comments_path,
+                "new_elements_count": new_elements_count,
+                "possible_comments_count": len(possible_comments)
+            }
+            
+        except Exception as e:
+            logger.error(f"分析评论交互失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None

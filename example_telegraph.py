@@ -67,7 +67,8 @@ def main():
                             section = "公司"
                     
                     # 使用format_output输出，确保包含板块信息
-                    formatted = format_output(title, date, time, sentiment, section)
+                    deepseek_analysis = result.get("deepseek_analysis", None)
+                    formatted = format_output(title, date, time, sentiment, section, deepseek_analysis)
                     print(f"\n[{i}] {formatted}")
                     print("-" * 50)
             else:

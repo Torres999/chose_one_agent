@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class TelegraphScraper:
     """电报爬虫主类，用于协调不同板块的爬虫"""
 
-    def __init__(self, cutoff_date, headless=True, debug=False, section="看盘"):
+    def __init__(self, cutoff_date, headless=True, debug=False, section="看盘", sentiment_analyzer_type="snownlp", deepseek_api_key=None):
         """
         初始化电报爬虫
 
@@ -23,11 +23,15 @@ class TelegraphScraper:
             headless: 是否使用无头模式运行浏览器
             debug: 是否启用调试模式
             section: 默认抓取的板块，如"看盘"或"公司"
+            sentiment_analyzer_type: 情感分析器类型，可选值："snownlp"或"deepseek"
+            deepseek_api_key: DeepSeek API密钥，当sentiment_analyzer_type为"deepseek"时必须提供
         """
         self.cutoff_date = cutoff_date
         self.headless = headless
         self.debug = debug
         self.section = section
+        self.sentiment_analyzer_type = sentiment_analyzer_type
+        self.deepseek_api_key = deepseek_api_key
         self.base_url = BASE_URL
         self.results = []
         
@@ -74,10 +78,22 @@ class TelegraphScraper:
                         
                         # 创建对应板块的爬虫实例
                         if section == "看盘":
-                            scraper = KanpanScraper(self.cutoff_date, self.headless, self.debug)
+                            scraper = KanpanScraper(
+                                self.cutoff_date, 
+                                self.headless, 
+                                self.debug,
+                                sentiment_analyzer_type=self.sentiment_analyzer_type,
+                                deepseek_api_key=self.deepseek_api_key
+                            )
                             scraper.section = "看盘"  # 显式设置板块
                         elif section == "公司":
-                            scraper = CompanyScraper(self.cutoff_date, self.headless, self.debug)
+                            scraper = CompanyScraper(
+                                self.cutoff_date, 
+                                self.headless, 
+                                self.debug,
+                                sentiment_analyzer_type=self.sentiment_analyzer_type,
+                                deepseek_api_key=self.deepseek_api_key
+                            )
                             scraper.section = "公司"  # 显式设置板块
                         else:
                             logger.warning(f"未支持的板块: {section}，跳过")

@@ -2,13 +2,12 @@ import datetime
 import logging
 import os
 import re
-from typing import Tuple, Optional, Union
+from typing import Tuple, Optional, Union, Dict, Any
 
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
-     # format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    format='%(asctime)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
@@ -26,26 +25,23 @@ def parse_datetime(date_str: str, time_str: str) -> datetime.datetime:
     try:
         # 处理空字符串情况
         if not date_str or not time_str:
-            logger.warning(f"日期或时间为空: date='{date_str}', time='{time_str}'，抛出异常")
+            logger.warning(f"日期或时间为空: date='{date_str}', time='{time_str}'")
             raise ValueError("日期或时间字符串为空")
         
-        # 处理只有月份和日期的情况 (如 "05-20")
-        if len(date_str.split('-')) == 2:
+        # 预处理日期格式
+        if len(date_str.split('-')) == 2:  # 只有月份和日期 (如 "05-20")
             current_year = datetime.datetime.now().year
             date_str = f"{current_year}-{date_str}"
-        
-        # 处理YYYY.MM.DD格式的日期，转换为YYYY-MM-DD
-        if re.match(r'^\d{4}\.\d{2}\.\d{2}$', date_str):
+        elif re.match(r'^\d{4}\.\d{2}\.\d{2}$', date_str):  # YYYY.MM.DD格式
             date_str = date_str.replace('.', '-')
         
-        # 处理特殊的时间格式，例如"下午14:30"
+        # 预处理时间格式
         if any(prefix in time_str for prefix in ["上午", "下午", "凌晨", "中午", "晚上"]):
-            # 提取数字部分
             time_match = re.search(r'(\d+:\d+)', time_str)
             if time_match:
                 time_str = time_match.group(1)
             else:
-                logger.warning(f"无法从'{time_str}'中提取时间，抛出异常")
+                logger.warning(f"无法从'{time_str}'中提取时间")
                 raise ValueError(f"无法从'{time_str}'中提取时间")
         
         # 处理只有小时没有分钟的情况
@@ -55,7 +51,7 @@ def parse_datetime(date_str: str, time_str: str) -> datetime.datetime:
         # 合并日期和时间
         datetime_str = f"{date_str} {time_str}"
         
-        # 尝试多种日期时间格式
+        # 定义支持的日期时间格式
         formats = [
             "%Y-%m-%d %H:%M",
             "%Y-%m-%d %H:%M:%S",
@@ -66,29 +62,28 @@ def parse_datetime(date_str: str, time_str: str) -> datetime.datetime:
             "%Y.%m.%d %H:%M:%S"
         ]
         
+        # 尝试解析完整的日期时间字符串
         for fmt in formats:
             try:
                 return datetime.datetime.strptime(datetime_str, fmt)
             except ValueError:
                 continue
         
-        # 如果所有格式都失败，尝试最基本的格式
-        logger.warning(f"无法解析日期时间: '{datetime_str}'，尝试基本格式")
-        # 尝试多种基本日期格式
+        # 如果所有格式都失败，尝试只解析日期部分
+        logger.warning(f"无法解析完整日期时间: '{datetime_str}'，尝试仅解析日期")
         basic_formats = ["%Y-%m-%d", "%Y.%m.%d", "%Y/%m/%d"]
         for fmt in basic_formats:
             try:
                 return datetime.datetime.strptime(date_str, fmt)
             except ValueError:
                 continue
-                
-        # 如果仍然失败，抛出异常
+        
+        # 所有尝试均失败
         logger.error(f"无法解析日期: '{date_str}'")
         raise ValueError(f"无法解析日期: '{date_str}'")
     
     except Exception as e:
         logger.error(f"日期时间解析错误: {e}, date='{date_str}', time='{time_str}'")
-        # 不再返回当前时间作为默认值，而是抛出异常让调用者处理
         raise ValueError(f"日期时间解析错误: {e}")
 
 def is_before_cutoff(post_date: datetime.datetime, cutoff_date: datetime.datetime) -> bool:
@@ -182,7 +177,8 @@ def extract_date_time(date_time_text: str) -> Tuple[str, str]:
         logger.error(f"提取日期时间错误: {e}, text='{date_time_text}'")
         return "", ""
 
-def format_output(title: str, date: str, time: str, sentiment: Optional[Union[str, int]] = None, section: str = "未知板块") -> str:
+def format_output(title: str, date: str, time: str, sentiment: Optional[Union[str, int, Dict[str, Any]]] = None, section: str = "未知板块", 
+               deepseek_analysis: Optional[Dict[str, Any]] = None) -> str:
     """
     格式化输出结果
     
@@ -190,8 +186,9 @@ def format_output(title: str, date: str, time: str, sentiment: Optional[Union[st
         title: 电报标题
         date: 电报日期
         time: 电报时间
-        sentiment: 评论情绪（可选），可以是字符串或0-5的数字评分
+        sentiment: 评论情绪（可选），可以是字符串、0-5的数字评分或包含情感分析信息的字典
         section: 所属板块（可选）
+        deepseek_analysis: Deepseek情感分析的详细结果（可选）
         
     Returns:
         格式化的输出字符串
@@ -199,7 +196,22 @@ def format_output(title: str, date: str, time: str, sentiment: Optional[Union[st
     output = f"标题：{title}\n日期：{date}\n时间：{time}"
     
     # 处理情感分析结果
-    if sentiment is not None:
+    if isinstance(sentiment, dict):
+        # 新版API返回的是字典
+        sentiment_score = sentiment.get("sentiment_score", 0)
+        sentiment_label = sentiment.get("sentiment_label", "无评论")
+        has_comments = sentiment.get("has_comments", False)
+        comments = sentiment.get("comments", [])
+        sentiment_analysis = sentiment.get("sentiment_analysis", "")
+        
+        output += f"\n评论情绪：{sentiment_label}"
+        output += f"\n所属板块：{section}"
+        
+        # 只有在有评论并且使用了DeepSeek分析时，才添加详细分析结果
+        if has_comments and comments and len(comments) > 0 and sentiment_analysis and sentiment_label != "无评论":
+            # 直接添加详细的情感分析结果
+            output += f"\n\n{sentiment_analysis}"
+    elif sentiment is not None:
         # 如果是数字评分，转换为文字描述
         if isinstance(sentiment, int):
             sentiment_mapping = {
@@ -210,10 +222,54 @@ def format_output(title: str, date: str, time: str, sentiment: Optional[Union[st
                 4: "积极",
                 5: "极度积极"
             }
-            sentiment_text = sentiment_mapping.get(sentiment, "中性")
+            sentiment_text = sentiment_mapping.get(sentiment, "无评论")
             output += f"\n评论情绪：{sentiment_text}"
         else:
             output += f"\n评论情绪：{sentiment}"
+        
+        output += f"\n所属板块：{section}"
+        
+        # 只有在评论情绪不是"无评论"时，才显示DeepSeek分析
+        if sentiment != 0 and sentiment_text != "无评论" and deepseek_analysis and isinstance(deepseek_analysis, dict):
+            # 如果有情感分数
+            if "score" in deepseek_analysis:
+                score = deepseek_analysis["score"]
+                output += f"\nDeepseek情感分析：{sentiment_text} (得分: {score:.2f})"
+            
+            # 如果有情感分布
+            if "distribution" in deepseek_analysis:
+                distribution = deepseek_analysis["distribution"]
+                pos = distribution.get("正面", 0) * 100
+                neu = distribution.get("中性", 0) * 100
+                neg = distribution.get("负面", 0) * 100
+                output += f"\n情感分布：正面 {pos:.1f}% | 中性 {neu:.1f}% | 负面 {neg:.1f}%"
+            
+            # 如果有情感关键词
+            if "keywords" in deepseek_analysis and deepseek_analysis["keywords"]:
+                keywords = ", ".join(deepseek_analysis["keywords"])
+                output += f"\n情感关键词：{keywords}"
+            
+            # 如果有分析内容
+            if "analysis" in deepseek_analysis and deepseek_analysis["analysis"]:
+                output += f"\n分析：{deepseek_analysis['analysis']}"
+            
+            # 如果有市场情绪
+            if "market_sentiment" in deepseek_analysis:
+                output += f"\n市场情绪：{deepseek_analysis['market_sentiment']}"
+            
+            # 如果有主要观点
+            if "main_points" in deepseek_analysis:
+                output += f"\n主要观点：{deepseek_analysis['main_points']}"
+            
+            # 如果有相关股票
+            if "related_stocks" in deepseek_analysis and deepseek_analysis["related_stocks"]:
+                stocks = ", ".join([f"{stock}({view})" for stock, view in deepseek_analysis["related_stocks"].items()])
+                output += f"\n相关股票：{stocks}"
+            
+            # 如果有建议
+            if "suggestion" in deepseek_analysis:
+                output += f"\n建议：{deepseek_analysis['suggestion']}"
+    else:
+        output += f"\n所属板块：{section}"
     
-    output += f"\n所属板块：{section}"
     return output 
