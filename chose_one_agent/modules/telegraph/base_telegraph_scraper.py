@@ -779,13 +779,13 @@ class BaseTelegraphScraper(BaseScraper):
             market_sentiment = "看多" if sentiment_label == "正面" else "看空" if sentiment_label == "负面" else "观望"
 
             # 5. 组装详细分析结果
-            analysis_text = f"===== DeepSeek情感分析 =====\n"
-            analysis_text += f"- 整体评论情感: {sentiment_label}\n"
-            analysis_text += f"- 情感评分: {sentiment_score}/5\n"
-            analysis_text += f"- 情感分布: 正面 {positive_count}/{len(comments)}, 负面 {negative_count}/{len(comments)}, 中性 {neutral_count}/{len(comments)}\n"
+            analysis_text = f"===== DeepSeek情感分析 ====="
+            analysis_text += f"整体评论情感: {sentiment_label}"
+            analysis_text += f"情感评分: {sentiment_score}/5"
+            analysis_text += f"情感分布: 正面 {positive_count}/{len(comments)}, 负面 {negative_count}/{len(comments)}, 中性 {neutral_count}/{len(comments)}"
             if keywords:
-                analysis_text += f"- 关键词: {', '.join(keywords)}\n"
-            analysis_text += f"- 市场情绪: {market_sentiment}\n"
+                analysis_text += f"关键词: {', '.join(keywords)}\n"
+            analysis_text += f"市场情绪: {market_sentiment}\n"
 
             # 6. 添加评论示例
             if comments and len(comments) > 0:
