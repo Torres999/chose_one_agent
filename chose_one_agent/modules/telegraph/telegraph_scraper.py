@@ -63,7 +63,8 @@ class TelegraphScraper:
             if not processed_sections:
                 processed_sections = ["看盘", "公司"]
                 
-            logger.info(f"开始爬取电报，子板块: {processed_sections}")
+            if self.debug:
+                logger.info(f"开始爬取电报，子板块: {processed_sections}")
             self.results = []  # 清空之前的结果
             
             # 使用单个Playwright实例处理所有板块
@@ -72,9 +73,57 @@ class TelegraphScraper:
                 context = browser.new_context(viewport={"width": 1280, "height": 800})
                 
                 try:
+                    # 先尝试导航到电报网站首页
+                    try:
+                        page = context.new_page()
+                        logger.info("导航到电报网站首页...")
+                        page.goto("https://www.telegraph-site.cn", timeout=15000)
+                        page.wait_for_load_state("networkidle", timeout=10000)
+                        time.sleep(2)
+                        
+                        # 检查电报链接是否可用
+                        telegraph_link = page.query_selector("a[href*='telegraph'], a:has-text('电报')")
+                        if telegraph_link:
+                            logger.info("找到电报链接，点击导航至电报页面...")
+                            telegraph_link.click()
+                            page.wait_for_load_state("networkidle", timeout=10000)
+                            time.sleep(2)
+                        else:
+                            logger.info("未找到电报链接，尝试直接导航到电报页面...")
+                            page.goto("https://www.telegraph-site.cn/telegraph", timeout=15000)
+                            page.wait_for_load_state("networkidle", timeout=10000)
+                            time.sleep(2)
+                            
+                        # 如果我们不在电报页面，打印警告
+                        if "telegraph" not in page.url:
+                            logger.warning(f"未成功导航到电报页面，当前URL: {page.url}")
+                            # 尝试使用JS查找电报链接
+                            page.evaluate("""
+                                () => {
+                                    const links = Array.from(document.querySelectorAll('a'));
+                                    const telegraphLink = links.find(link => 
+                                        (link.textContent || '').includes('电报') || 
+                                        (link.href || '').includes('telegraph')
+                                    );
+                                    if (telegraphLink) telegraphLink.click();
+                                }
+                            """)
+                            page.wait_for_load_state("networkidle", timeout=10000)
+                            time.sleep(2)
+                    except Exception as e:
+                        logger.error(f"导航到电报页面时出错: {e}")
+                        logger.info("继续尝试处理各个板块...")
+                    finally:
+                        # 关闭初始页面
+                        try:
+                            page.close()
+                        except:
+                            pass
+                
                     # 爬取每个板块
                     for section in processed_sections:
-                        logger.info(f"开始爬取'{section}'板块")
+                        if self.debug:
+                            logger.info(f"开始爬取'{section}'板块")
                         
                         # 创建对应板块的爬虫实例
                         if section == "看盘":
@@ -96,7 +145,8 @@ class TelegraphScraper:
                             )
                             scraper.section = "公司"  # 显式设置板块
                         else:
-                            logger.warning(f"未支持的板块: {section}，跳过")
+                            if self.debug:
+                                logger.warning(f"未支持的板块: {section}，跳过")
                             continue
                         
                         # 设置浏览器实例
@@ -105,6 +155,19 @@ class TelegraphScraper:
                         scraper.page = context.new_page()
                         
                         try:
+                            # 首先尝试直接访问板块页面
+                            try:
+                                section_url = f"https://www.telegraph-site.cn/telegraph"
+                                logger.info(f"直接导航到电报页面: {section_url}")
+                                scraper.page.goto(section_url, timeout=15000)
+                                scraper.page.wait_for_load_state("networkidle", timeout=10000)
+                                time.sleep(2)
+                                
+                                # 模拟成功导航到板块
+                                logger.info(f"已导航到电报页面，将尝试查找'{section}'板块内容")
+                            except Exception as e:
+                                logger.error(f"直接导航到板块页面失败: {e}")
+                            
                             # 运行爬虫
                             section_results = scraper.run()
                             
@@ -113,10 +176,11 @@ class TelegraphScraper:
                                 # 确保每个结果都包含板块信息，并且是正确的板块
                                 for result in section_results:
                                     result["section"] = section
-
+                                
                                 self.results.extend(section_results)
-                                logger.info(f"'{section}'板块爬取完成，获取到{len(section_results)}条电报")
-                            else:
+                                if self.debug:
+                                    logger.info(f"'{section}'板块爬取完成，获取到{len(section_results)}条电报")
+                            elif self.debug:
                                 logger.warning(f"在'{section}'板块未找到符合条件的电报")
                         except Exception as e:
                             logger.error(f"爬取'{section}'板块时出错: {e}")
@@ -131,7 +195,8 @@ class TelegraphScraper:
             
             # 结果汇总，再次确认所有结果都有正确的板块信息
             if self.results:
-                logger.info(f"共找到 {len(self.results)} 条符合截止日期 {self.cutoff_date} 之后的电报")
+                if self.debug:
+                    logger.info(f"共找到 {len(self.results)} 条符合截止日期 {self.cutoff_date} 之后的电报")
                 # 检查每个结果的板块信息
                 for i, result in enumerate(self.results):
                     if "section" not in result or not result["section"] or result["section"] == "未知板块":
@@ -141,12 +206,15 @@ class TelegraphScraper:
                             result["section"] = "看盘"
                         elif "公司" in title or "集团" in title or "股份" in title:
                             result["section"] = "公司"
-                    logger.debug(f"结果 {i+1}: 标题='{result.get('title', '无标题')}', 板块='{result.get('section', '未知板块')}'")
-            else:
+                    if self.debug:
+                        logger.debug(f"结果 {i+1}: 标题='{result.get('title', '无标题')}', 板块='{result.get('section', '未知板块')}'")
+            elif self.debug:
                 logger.warning(f"未找到任何符合截止日期 {self.cutoff_date} 之后的电报，请考虑调整日期范围")
             
             return self.results
             
         except Exception as e:
             logger.error(f"运行电报爬虫时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return self.results

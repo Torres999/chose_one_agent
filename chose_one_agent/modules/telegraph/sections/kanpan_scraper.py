@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import logging
 import re
+import time
 from typing import List, Dict, Any
 
 from chose_one_agent.modules.telegraph.base_telegraph_scraper import BaseTelegraphScraper
@@ -37,32 +38,32 @@ class KanpanScraper(BaseTelegraphScraper):
     
     def run(self) -> List[Dict[str, Any]]:
         """
-        执行看盘板块的爬取和分析过程
+        运行看盘板块爬虫
         
         Returns:
-            包含所有分析结果的列表
+            List[Dict[str, Any]]: 分析结果列表
         """
+        logger.info("开始运行看盘板块爬虫")
+        
+        # 直接导航到电报页面
         try:
-            logger.info("开始运行看盘板块爬虫")
+            # 尝试直接访问特定页面
+            self.page.goto("https://www.telegraph-site.cn/telegraph", timeout=15000)
+            self.page.wait_for_load_state("networkidle", timeout=10000)
+            time.sleep(2)
             
-            # 导航到看盘板块
-            if not self.navigate_to_telegraph_section(self.section):
-                logger.error(f"无法导航到'{self.section}'板块")
-                return []
-            
-            # 使用基类的通用方法爬取板块内容
-            results = self.scrape_section(self.section)
-            
-            # 确保所有结果都标记为看盘板块
-            for result in results:
-                result["section"] = "看盘"
-                
-            logger.info(f"看盘板块爬取完成，获取到 {len(results)} 条电报")
-            return results
-            
+            # 尝试导航到看盘板块
+            navigation_success = self.navigate_to_telegraph_section("看盘")
+            if not navigation_success:
+                logger.error("无法导航到'看盘'板块")
+                # 即使导航失败，我们也继续尝试抓取当前页面的内容
+                logger.info("尝试从当前页面抓取内容...")
         except Exception as e:
-            logger.error(f"运行看盘爬虫时出错: {e}")
-            return []
+            logger.error(f"导航时出错: {e}")
+            
+        # 抓取板块内容
+        results = self.scrape_section("看盘")
+        return results
             
     def extract_post_info(self, element) -> Dict[str, Any]:
         """

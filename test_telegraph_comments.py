@@ -1,172 +1,121 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-测试脚本：用于收集和调试cls.cn/telegraph网站的评论元素信息
+测试脚本：用于收集和调试电报网站的评论元素信息
 """
 
-import os
-import logging
-import datetime
-import json
 import re
-from typing import List, Dict, Any
+import json
+import sys
+import os
+from datetime import datetime
 
-from chose_one_agent.modules.telegraph.base_telegraph_scraper import BaseTelegraphScraper
-from chose_one_agent.modules.telegraph.telegraph_scraper import TelegraphScraper
-from chose_one_agent.modules.telegraph.post_extractor import PostExtractor
-from chose_one_agent.utils.config import BASE_URL
+# 添加项目根目录到路径
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('/tmp/telegraph_comments_test.log')
-    ]
-)
-logger = logging.getLogger(__name__)
+from playwright.sync_api import sync_playwright
 
-def find_non_zero_comment_posts(posts: List[Dict], max_results: int = 3) -> List[Dict]:
-    """
-    筛选出评论数非零的帖子
-    
-    Args:
-        posts: 帖子列表
-        max_results: 最多返回的结果数
+def collect_comment_elements(url="https://www.telegraph-site.cn/telegraph"):
+    """收集电报网站的评论元素信息"""
+    with sync_playwright() as playwright:
+        # 初始化浏览器
+        browser = playwright.chromium.launch(headless=False)
+        context = browser.new_context(viewport={"width": 1280, "height": 800})
+        page = context.new_page()
         
-    Returns:
-        评论数非零的帖子列表
-    """
-    result = []
-    for post in posts:
-        comment_count = post.get('comment_count', 0)
-        if comment_count > 0:
-            result.append(post)
-            logger.info(f"找到评论数非零的帖子: 标题='{post.get('title', '无标题')}', 评论数={comment_count}")
-            if len(result) >= max_results:
-                break
-    
-    if not result:
-        logger.warning("未找到评论数非零的帖子，将使用原始帖子列表")
-        # 如果没有找到评论数非零的帖子，返回原始帖子列表前几个
-        return posts[:max_results]
-    
-    return result
-
-def main():
-    """
-    运行测试：收集和分析评论元素
-    """
-    try:
-        logger.info("开始运行评论元素收集测试")
+        # 导航到电报页面
+        print(f"正在导航到 {url}...")
+        page.goto(url, timeout=10000)
+        page.wait_for_load_state("networkidle", timeout=5000)
         
-        # 设置截止日期为昨天，以确保获取最近的帖子
-        cutoff_date = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-        logger.info(f"使用截止日期: {cutoff_date}")
+        # 等待用户手动导航到包含评论的页面
+        print("请手动导航到包含评论的页面，然后按回车继续...")
+        input()
         
-        # 使用非无头模式以便观察浏览器行为
-        headless = False
-        debug = True
+        # 收集页面上的评论相关元素
+        print("正在收集评论元素信息...")
         
-        # 测试收集一些帖子
-        section_results = []
+        comment_selectors = [
+            "span:has-text('评论')",
+            ".evaluate-count", 
+            "[class*='comment']", 
+            "[class*='evaluate']"
+        ]
         
-        # 使用对应的爬虫类和上下文管理器方式初始化
-        from chose_one_agent.modules.telegraph.sections.kanpan_scraper import KanpanScraper
-        with KanpanScraper(
-            cutoff_date, 
-            headless, 
-            debug
-        ) as section_scraper:
+        # 查找所有可能的评论元素
+        all_elements = []
+        for selector in comment_selectors:
             try:
-                # 导航到板块
-                section = "看盘"
-                if section_scraper.navigate_to_telegraph_section(section):
-                    logger.info(f"成功导航到'{section}'板块")
-                    
-                    # 创建PostExtractor来提取帖子
-                    post_extractor = PostExtractor()
-                    
-                    # 从页面获取帖子
-                    posts, reached_cutoff = post_extractor.extract_posts_from_page(section_scraper.page)
-                    logger.info(f"找到 {len(posts)} 个帖子")
-                    
-                    # 过滤出评论数非零的帖子
-                    test_posts = find_non_zero_comment_posts(posts)
-                    logger.info(f"选择了 {len(test_posts)} 个帖子进行测试")
-                    
-                    if test_posts:
-                        # 对每个帖子，运行调试功能
-                        for i, post_info in enumerate(test_posts):
-                            if not post_info.get("is_valid_post", False):
-                                logger.warning(f"跳过无效帖子 {i+1}")
-                                continue
-                                
-                            logger.info(f"测试帖子 {i+1}/{len(test_posts)}")
+                elements = page.query_selector_all(selector)
+                for i, element in enumerate(elements):
+                    try:
+                        # 获取元素信息
+                        bbox = element.bounding_box()
+                        if not bbox or bbox["width"] <= 0 or bbox["height"] <= 0:
+                            continue  # 跳过不可见元素
                             
-                            # 获取帖子元素
-                            post_element = post_info.get("element")
-                            if not post_element:
-                                logger.warning(f"帖子 {i+1} 没有关联元素，跳过")
-                                continue
+                        text = element.inner_text().strip()
+                        if not text:
+                            continue  # 跳过空元素
                             
-                            if post_info:
-                                logger.info(f"帖子标题: {post_info.get('title', '无标题')}")
-                                logger.info(f"评论计数: {post_info.get('comment_count', 0)}")
+                        # 尝试提取评论计数
+                        count = None
+                        patterns = [
+                            r'评论[（(](\d+)[)）]',
+                            r'评论[:：]\s*(\d+)',
+                            r'评论\s+(\d+)'
+                        ]
+                        for pattern in patterns:
+                            match = re.search(pattern, text)
+                            if match:
+                                count = int(match.group(1))
+                                break
                                 
-                                # 调试页面结构
-                                debug_info = section_scraper.debug_page_structure()
-                                if debug_info:
-                                    logger.info(f"已保存页面结构信息: {debug_info}")
-                                
-                                # 获取评论
-                                # 特别观察评论计数为0的处理情况
-                                if post_info.get('comment_count', 0) == 0:
-                                    logger.info("帖子评论计数为0，观察get_comments方法处理...")
-                                else:
-                                    logger.info(f"帖子评论计数为{post_info.get('comment_count', 0)}，尝试获取评论...")
-                                    
-                                comments = section_scraper.get_comments(post_element)
-                                logger.info(f"找到 {len(comments)} 条评论")
-                                
-                                # 记录样本评论
-                                if comments:
-                                    sample_comments = comments[:min(3, len(comments))]
-                                    logger.info(f"样本评论: {sample_comments}")
-                                else:
-                                    logger.info("未找到任何评论")
-                                
-                                # 将结果添加到列表
-                                if comments:
-                                    post_info["comments"] = comments
-                                    post_info["section"] = section
-                                    section_results.append(post_info)
-                else:
-                    logger.error(f"无法导航到'{section}'板块")
-            
+                        all_elements.append({
+                            "selector": selector,
+                            "text": text,
+                            "comment_count": count,
+                            "position": {
+                                "x": bbox["x"],
+                                "y": bbox["y"],
+                                "width": bbox["width"],
+                                "height": bbox["height"]
+                            }
+                        })
+                        
+                        # 高亮这个元素，以便识别
+                        page.evaluate("""
+                            (element) => {
+                                const oldBorder = element.style.border;
+                                element.style.border = '2px solid red';
+                                setTimeout(() => { element.style.border = oldBorder; }, 1000);
+                            }
+                        """, element)
+                        
+                    except Exception as e:
+                        print(f"处理元素时出错: {e}")
+                        
             except Exception as e:
-                logger.error(f"处理'{section}'板块时出错: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
+                print(f"使用选择器 '{selector}' 查找元素时出错: {e}")
         
-        # 保存结果
-        if section_results:
-            timestamp = int(datetime.datetime.now().timestamp())
-            results_path = f"/tmp/telegraph_comments_results_{timestamp}.json"
-            with open(results_path, "w", encoding="utf-8") as f:
-                json.dump(section_results, f, ensure_ascii=False, indent=2)
-            logger.info(f"已保存测试结果至: {results_path}")
-            logger.info(f"共获取到 {len(section_results)} 个帖子的信息")
-        else:
-            logger.warning("未获取到任何帖子信息")
+        # 输出结果
+        print(f"找到 {len(all_elements)} 个评论相关元素")
         
-        logger.info("评论元素收集测试完成")
-    
-    except Exception as e:
-        logger.error(f"运行测试时发生错误: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+        # 保存结果到JSON文件
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"comment_elements_{timestamp}.json"
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(all_elements, f, ensure_ascii=False, indent=2)
+            
+        print(f"结果已保存到 {filename}")
+        
+        # 等待用户按任意键后关闭浏览器
+        print("按回车键退出...")
+        input()
+        
+        # 关闭浏览器
+        context.close()
+        browser.close()
 
 if __name__ == "__main__":
-    main() 
+    collect_comment_elements() 

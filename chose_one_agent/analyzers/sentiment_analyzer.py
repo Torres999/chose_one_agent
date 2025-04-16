@@ -1,5 +1,5 @@
 import logging
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
 from snownlp import SnowNLP
 
 # 配置日志
@@ -96,4 +96,39 @@ class SentimentAnalyzer:
                 
         except Exception as e:
             logger.error(f"评论综合分析错误: {e}")
-            return "中性" 
+            return "中性"
+            
+    def analyze_comments_batch(self, comments: List[str]) -> Dict[str, Any]:
+        """
+        分析多条评论，综合得出整体情感，与DeepSeekSentimentAnalyzer兼容的API
+        
+        Args:
+            comments: 评论列表
+            
+        Returns:
+            包含整体情感标签和得分的字典:
+            {
+                'label': 情感标签，为"正面"、"负面"或"中性",
+                'score': 情感得分，0-5的整数（0表示无评论）
+            }
+        """
+        if not comments:
+            return {"label": "中性", "score": 0}
+        
+        try:
+            # 获取情感标签
+            sentiment_label = self.analyze_comments(comments)
+            
+            # 转换为情感得分（0-5）
+            if sentiment_label == "正面":
+                sentiment_score = 4  # 积极
+            elif sentiment_label == "负面":
+                sentiment_score = 2  # 消极
+            else:
+                sentiment_score = 3  # 中性
+            
+            return {"label": sentiment_label, "score": sentiment_score}
+                
+        except Exception as e:
+            logger.error(f"批量评论分析错误: {e}")
+            return {"label": "中性", "score": 3} 

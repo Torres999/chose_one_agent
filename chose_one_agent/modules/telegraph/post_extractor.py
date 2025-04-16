@@ -11,6 +11,35 @@ logger = logging.getLogger(__name__)
 class PostExtractor:
     """帖子内容提取器类，用于从页面中提取帖子信息"""
     
+    def __init__(self):
+        # 定义用于识别电报元素的CSS选择器
+        self.selectors = {
+            # 电报列表的可能选择器
+            "list_selectors": [
+                ".telegraph-list",
+                ".telegraph-container",
+                ".telegraph-feed",
+                ".telegraph-stream",
+                ".telegraph-content",
+                "#telegraph-list",
+                "[class*='telegraph-list']",
+                "[class*='telegraph']",
+            ],
+            
+            # 电报项的可能选择器
+            "item_selectors": [
+                ".telegraph-item",
+                ".item-card",
+                ".post-item",
+                ".feed-item",
+                ".news-item",
+                ".card-item",
+                ".article-item",
+                "[class*='item-']",
+                "[class*='-item']"
+            ]
+        }
+    
     def extract_post_info(self, post_element) -> Dict[str, Any]:
         """
         从帖子元素中提取信息
@@ -155,6 +184,27 @@ class PostExtractor:
             # 如果元素包含"阅读"或"分享"，更可能是帖子
             if "阅读" in element_text or "分享" in element_text:
                 is_likely_post = True
+                
+            # 获取帖子内容
+            # 尝试提取报文内容，特别是对于含有"报文"的标题
+            if "报文" in element_text or "电报" in element_text:
+                # 获取标题后的内容作为报文内容
+                title = result["title"]
+                if title != "未知标题" and title in element_text:
+                    content_parts = element_text.split(title, 1)
+                    if len(content_parts) > 1:
+                        # 移除评论、阅读、分享等信息
+                        content = content_parts[1]
+                        # 清理内容
+                        content = re.sub(r'\s*\d+\s*阅读.*$', '', content, flags=re.DOTALL)
+                        content = re.sub(r'\s*\d+\s*评论.*$', '', content, flags=re.DOTALL)
+                        content = re.sub(r'\s*\d+\s*分享.*$', '', content, flags=re.DOTALL)
+                        content = content.strip()
+                        if content:
+                            result["content"] = content
+                            # 如果标题中没有明确指出是报文，但内容看起来像报文，则将"报文"添加到标题
+                            if "报文" not in result["title"] and len(content) > 50:
+                                result["title"] = "【报文】" + result["title"]
 
             # 验证有效性 - 即使没有日期，只要有时间和标题，也认为是有效帖子
             if is_likely_post and result["time"] != "未知时间" and result["title"] != "未知标题":
@@ -289,7 +339,7 @@ class PostExtractor:
             # ===== 策略2: 使用标准选择器 =====
             # 只有在策略1未找到足够帖子时才尝试
             if len(posts) < 3:
-                # 财联社电报列表的可能选择器
+                # 电报网站电报列表的可能选择器
                 list_selectors = [
                     "div[class*='telegraph-list']",
                     ".telegraph-container",
@@ -336,7 +386,7 @@ class PostExtractor:
             # ===== 策略3: 直接使用通用选择器 =====
             # 只有在前两种策略未找到足够帖子时才尝试
             if len(posts) < 3:
-                # 财联社电报项的其他可能选择器
+                # 电报网站电报项的其他可能选择器
                 selectors = [
                     ".telegraph-item",             # 标准电报项
                     "div.box", "div.red-box",      # 框式布局

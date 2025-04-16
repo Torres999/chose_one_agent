@@ -204,72 +204,58 @@ def format_output(title: str, date: str, time: str, sentiment: Optional[Union[st
         comments = sentiment.get("comments", [])
         sentiment_analysis = sentiment.get("sentiment_analysis", "")
         
+        # 如果标题中包含报文，添加报文内容
+        if "报文" in title and "content" in sentiment:
+            content = sentiment.get("content", "")
+            if content:
+                output += f"\n报文内容：{content}"
+        
         output += f"\n评论情绪：{sentiment_label}"
         output += f"\n所属板块：{section}"
         
         # 只有在有评论并且使用了DeepSeek分析时，才添加详细分析结果
         if has_comments and comments and len(comments) > 0 and sentiment_analysis and sentiment_label != "无评论":
-            # 直接添加详细的情感分析结果
+            # 处理详细情感分析结果中的行分隔，确保每个部分都在新行
+            if "- 整体评论情感:" in sentiment_analysis and "- 情感评分:" in sentiment_analysis:
+                # 替换所有没有换行的分隔项
+                sentiment_analysis = sentiment_analysis.replace("- 整体评论情感:", "\n- 整体评论情感:")
+                sentiment_analysis = sentiment_analysis.replace("- 情感评分:", "\n- 情感评分:")
+                sentiment_analysis = sentiment_analysis.replace("- 情感分布:", "\n- 情感分布:")
+                sentiment_analysis = sentiment_analysis.replace("- 关键词:", "\n- 关键词:")
+                sentiment_analysis = sentiment_analysis.replace("- 市场情绪:", "\n- 市场情绪:")
+                
+                # 移除开头可能的多余换行
+                if sentiment_analysis.startswith("\n"):
+                    sentiment_analysis = sentiment_analysis[1:]
+            
             output += f"\n\n{sentiment_analysis}"
-    elif sentiment is not None:
-        # 如果是数字评分，转换为文字描述
-        if isinstance(sentiment, int):
-            sentiment_mapping = {
-                0: "无评论",
-                1: "极度消极",
-                2: "消极",
-                3: "中性",
-                4: "积极",
-                5: "极度积极"
-            }
-            sentiment_text = sentiment_mapping.get(sentiment, "无评论")
-            output += f"\n评论情绪：{sentiment_text}"
+    elif isinstance(sentiment, (int, float)):
+        # 评分作为整数，转换为情感描述
+        if sentiment == 0:
+            output += f"\n评论情绪：无评论"
+        elif sentiment == 1:
+            output += f"\n评论情绪：极度消极"
+        elif sentiment == 2:
+            output += f"\n评论情绪：消极"
+        elif sentiment == 3:
+            output += f"\n评论情绪：中性"
+        elif sentiment == 4:
+            output += f"\n评论情绪：积极"
+        elif sentiment == 5:
+            output += f"\n评论情绪：极度积极"
         else:
-            output += f"\n评论情绪：{sentiment}"
+            output += f"\n评论情绪：未知({sentiment})"
         
         output += f"\n所属板块：{section}"
-        
-        # 只有在评论情绪不是"无评论"时，才显示DeepSeek分析
-        if sentiment != 0 and sentiment_text != "无评论" and deepseek_analysis and isinstance(deepseek_analysis, dict):
-            # 如果有情感分数
-            if "score" in deepseek_analysis:
-                score = deepseek_analysis["score"]
-                output += f"\nDeepseek情感分析：{sentiment_text} (得分: {score:.2f})"
-            
-            # 如果有情感分布
-            if "distribution" in deepseek_analysis:
-                distribution = deepseek_analysis["distribution"]
-                pos = distribution.get("正面", 0) * 100
-                neu = distribution.get("中性", 0) * 100
-                neg = distribution.get("负面", 0) * 100
-                output += f"\n情感分布：正面 {pos:.1f}% | 中性 {neu:.1f}% | 负面 {neg:.1f}%"
-            
-            # 如果有情感关键词
-            if "keywords" in deepseek_analysis and deepseek_analysis["keywords"]:
-                keywords = ", ".join(deepseek_analysis["keywords"])
-                output += f"\n情感关键词：{keywords}"
-            
-            # 如果有分析内容
-            if "analysis" in deepseek_analysis and deepseek_analysis["analysis"]:
-                output += f"\n分析：{deepseek_analysis['analysis']}"
-            
-            # 如果有市场情绪
-            if "market_sentiment" in deepseek_analysis:
-                output += f"\n市场情绪：{deepseek_analysis['market_sentiment']}"
-            
-            # 如果有主要观点
-            if "main_points" in deepseek_analysis:
-                output += f"\n主要观点：{deepseek_analysis['main_points']}"
-            
-            # 如果有相关股票
-            if "related_stocks" in deepseek_analysis and deepseek_analysis["related_stocks"]:
-                stocks = ", ".join([f"{stock}({view})" for stock, view in deepseek_analysis["related_stocks"].items()])
-                output += f"\n相关股票：{stocks}"
-            
-            # 如果有建议
-            if "suggestion" in deepseek_analysis:
-                output += f"\n建议：{deepseek_analysis['suggestion']}"
     else:
+        # 处理旧格式的字符串情感
+        output += f"\n评论情绪：{sentiment or '无评论'}"
         output += f"\n所属板块：{section}"
+    
+    # 如果有DeepSeek的分析结果
+    if deepseek_analysis:
+        sentiment_label = deepseek_analysis.get("label", "中性")
+        sentiment_score = deepseek_analysis.get("score", 3)
+        output += f"\n\nDeepSeek情感分析：{sentiment_label} (得分: {sentiment_score}/5)"
     
     return output 

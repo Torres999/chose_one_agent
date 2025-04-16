@@ -122,6 +122,10 @@ def format_results(results: List[Dict[str, Any]]) -> str:
             "sentiment_analysis": result.get("sentiment_analysis", "")
         }
         
+        # 如果有报文内容，添加到情感信息中
+        if "content" in result:
+            sentiment_info["content"] = result["content"]
+        
         # 如果还存在旧格式的sentiment字段，优先使用
         old_sentiment = result.get("sentiment", None)
         if old_sentiment is not None:
@@ -166,7 +170,10 @@ def run_telegraph_scraper(cutoff_date: datetime.datetime, sections: List[str], h
         processed_sections = ["看盘", "公司"]
         
     logger.info(f"开始爬取电报，截止日期: {cutoff_date}, 子板块: {processed_sections}")
-    logger.info(f"使用情感分析器: {sentiment_analyzer}")
+    
+    # 仅在调试模式下显示情感分析器信息
+    if debug:
+        logger.info(f"使用情感分析器: {sentiment_analyzer}")
     
     # 检查DeepSeek API密钥
     if sentiment_analyzer == "deepseek":
@@ -174,7 +181,7 @@ def run_telegraph_scraper(cutoff_date: datetime.datetime, sections: List[str], h
         if not deepseek_api_key:
             logger.warning("使用DeepSeek情感分析器但未提供API密钥，将回退至SnowNLP")
             sentiment_analyzer = "snownlp"
-        else:
+        elif debug:
             logger.info("已设置DeepSeek API密钥")
     
     # 如果是调试模式，设置日志级别为DEBUG
@@ -191,7 +198,10 @@ def run_telegraph_scraper(cutoff_date: datetime.datetime, sections: List[str], h
             deepseek_api_key=deepseek_api_key
         )
         results = scraper.run(processed_sections)
-        logger.info(f"电报爬取完成，共处理了 {len(results)} 条电报")
+        
+        # 仅在调试模式下显示详细日志
+        if debug:
+            logger.info(f"电报爬取完成，共处理了 {len(results)} 条电报")
         return results
     except Exception as e:
         logger.error(f"运行电报爬虫时出错: {e}")
@@ -212,7 +222,7 @@ def main():
         logger.debug(f"命令行参数: {args}")
         logger.debug(f"截止日期: {cutoff_date}")
     
-    logger.info(f"开始运行ChoseOne财经网站分析智能体，截止日期: {cutoff_date}")
+    logger.info(f"开始运行ChoseOne财经网站分析智能体")
     
     try:
         # 爬取电报内容
@@ -229,7 +239,9 @@ def main():
         formatted_output = format_results(results)
         print("\n" + formatted_output)
         
-        logger.info(f"分析完成，共处理了 {len(results)} 条内容")
+        # 仅在调试模式下显示总结日志
+        if args.debug:
+            logger.info(f"分析完成，共处理了 {len(results)} 条内容")
         
     except Exception as e:
         logger.error(f"运行过程中出错: {e}")
