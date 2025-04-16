@@ -8,12 +8,15 @@ import re
 import random
 import json
 
+from playwright.sync_api import sync_playwright, Page, ElementHandle
+
 from chose_one_agent.scrapers.base_scraper import BaseScraper
 from chose_one_agent.utils.helpers import parse_datetime, is_before_cutoff, extract_date_time, is_in_date_range
 from chose_one_agent.analyzers.sentiment_analyzer import SentimentAnalyzer
 from chose_one_agent.analyzers.deepseek_sentiment_analyzer import DeepSeekSentimentAnalyzer
 from chose_one_agent.analyzers.keyword_analyzer import KeywordAnalyzer
 from chose_one_agent.utils.config import BASE_URL
+from chose_one_agent.modules.telegraph.post_extractor import PostExtractor
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -25,7 +28,13 @@ class BaseTelegraphScraper(BaseScraper):
     该类提供了通用的方法，特定板块的爬虫类应该继承此类并实现特定的处理逻辑
     """
 
-    def __init__(self, cutoff_date, headless=True, debug=False, sentiment_analyzer_type="snownlp", deepseek_api_key=None):
+    def __init__(
+        self,
+        cutoff_date,
+        headless=True,
+        debug=False,
+        sentiment_analyzer_type="snownlp",
+         deepseek_api_key=None):
         """
         初始化电报爬虫基类
 
@@ -150,7 +159,9 @@ class BaseTelegraphScraper(BaseScraper):
                 # 1. 尝试从当前页面获取评论详情链接
                 detail_url = None
                 try:
-                    for selector in ["a:has-text('评论')", "a[href*='/detail/']"]:
+                    for selector in [
+    "a:has-text('评论')",
+     "a[href*='/detail/']"]:
                         comment_link = self.page.query_selector(selector)
                         if comment_link:
                             href = comment_link.get_attribute("href")
@@ -161,7 +172,7 @@ class BaseTelegraphScraper(BaseScraper):
                                     detail_url = href
                                 if self.debug:
                                     logger.info(f"找到评论详情页链接: {detail_url}")
-                                    break
+                                break
                 except Exception as e:
                     if self.debug:
                         logger.error(f"获取评论链接时出错: {e}")
@@ -200,7 +211,8 @@ class BaseTelegraphScraper(BaseScraper):
 
                                 for comment_element in comment_elements:
                                     text = comment_element.inner_text().strip()
-                                    if text and len(text) > 3 and "评论" not in text and "登录" not in text:
+                                    if text and len(
+                                        text) > 3 and "评论" not in text and "登录" not in text:
                                         comments.append(text)
 
                                 if comments:
@@ -262,15 +274,17 @@ class BaseTelegraphScraper(BaseScraper):
                                     # 点击评论按钮
                                     try:
                                         if self.debug:
-                                            logger.info(f"点击评论按钮: '{element.inner_text().strip()}'")
-                                        
+                                            logger.info(
+                                                f"点击评论按钮: '{element.inner_text().strip()}'")
+
                                         # 尝试常规点击
                                         try:
                                             element.click(timeout=5000)
                                             clicked = True
                                         except:
                                             # 尝试JavaScript点击
-                                            self.page.evaluate("(element) => element.click()", element)
+                                            self.page.evaluate(
+    "(element) => element.click()", element)
                                             clicked = True
                                     except:
                                         if self.debug:
@@ -300,7 +314,8 @@ class BaseTelegraphScraper(BaseScraper):
                                     for content_selector in comment_content_selectors:
                                         comment_elements = self.page.query_selector_all(
                                             content_selector)
-                                        if comment_elements and len(comment_elements) > 0:
+                                        if comment_elements and len(
+                                            comment_elements) > 0:
                                             if self.debug:
                                                 logger.info(
                                                     f"使用选择器 '{content_selector}' 找到 {len(comment_elements)} 个评论元素")
@@ -321,7 +336,8 @@ class BaseTelegraphScraper(BaseScraper):
                                     # 返回原始页面
                                     try:
                                         self.page.goto(current_url)
-                                        self.page.wait_for_load_state("networkidle", timeout=5000)
+                                        self.page.wait_for_load_state(
+                                            "networkidle", timeout=5000)
                                     except:
                                         pass
 
@@ -366,10 +382,12 @@ class BaseTelegraphScraper(BaseScraper):
                                 # 提取评论
                                 comment_elements = self.page.query_selector_all(
                                     ".comment-content, .evaluate-content, [class*='comment'], [class*='evaluate']")
-                                if comment_elements and len(comment_elements) > 0:
+                                if comment_elements and len(
+                                    comment_elements) > 0:
                                     for element in comment_elements:
                                         text = element.inner_text().strip()
-                                        if text and len(text) > 3 and "评论" not in text and "登录" not in text and "注册" not in text:
+                                        if text and len(
+                                            text) > 3 and "评论" not in text and "登录" not in text and "注册" not in text:
                                             comments.append(text)
 
                                     # 返回原页面
@@ -377,15 +395,15 @@ class BaseTelegraphScraper(BaseScraper):
                                     self.page.wait_for_load_state(
                                         "networkidle", timeout=5000)
 
-                                    if comments:
-                                        logger.info(
-                                            f"通过ID访问详情页获取到 {len(comments)} 条评论")
-                                        return comments
+                        if comments:
+                            logger.info(
+                                f"通过ID访问详情页获取到 {len(comments)} 条评论")
+                            return comments
 
-                                # 返回原页面
-                                self.page.goto(current_url)
-                                self.page.wait_for_load_state(
-                                    "networkidle", timeout=5000)
+                        # 返回原页面
+                        self.page.goto(current_url)
+                        self.page.wait_for_load_state(
+                            "networkidle", timeout=5000)
                     except Exception as e:
                         if self.debug:
                             logger.error(f"通过ID直接访问评论页出错: {e}")
@@ -406,21 +424,21 @@ class BaseTelegraphScraper(BaseScraper):
                                     '.evaluate-list', '.evaluate-content', '.comments-container',
                                     '.comment-list', '[class*="evaluate"]', '[class*="comment"]'
                                 ];
-                                
+
                                 for (const selector of containerSelectors) {
                                     const containers = document.querySelectorAll(selector);
                                     for (const container of containers) {
                                         const text = container.innerText?.trim();
-                                        if (text && text.length > 5 && text.length < 500 && 
+                                        if (text && text.length > 5 && text.length < 500 &&
                                             !text.includes('登录') && !text.includes('注册') &&
                                             !text.includes('评论') && !text.includes('点赞')) {
                                             results.push(text);
                                         }
-                                        
+
                                         const children = container.querySelectorAll('*');
                                         for (const child of children) {
                                             const childText = child.innerText?.trim();
-                                            if (childText && childText.length > 5 && childText.length < 500 && 
+                                            if (childText && childText.length > 5 && childText.length < 500 &&
                                                 !childText.includes('登录') && !childText.includes('注册') &&
                                                 !childText.includes('评论') && !childText.includes('点赞')) {
                                                 results.push(childText);
@@ -469,7 +487,8 @@ class BaseTelegraphScraper(BaseScraper):
                                 ".comment-item, .comment-content, [class*='comment']")
                             for element in comment_elements:
                                 comment_text = element.inner_text().strip()
-                                if comment_text and len(comment_text) > 3 and "评论" not in comment_text:
+                                if comment_text and len(
+                                    comment_text) > 3 and "评论" not in comment_text:
                                     comments.append(comment_text)
 
                             # 返回到列表页面
@@ -524,120 +543,57 @@ class BaseTelegraphScraper(BaseScraper):
                 "section": post_info.get("section", "未知板块"),
                 "comments": [],
                 "has_comments": False,
-                "keyword_analysis": {},
                 "comment_keyword_analysis": {}
             }
 
             # 获取评论计数和内容
             comment_count = post_info.get("comment_count", 0)
-            content = post_info.get("content", "")
-
-            # 进行关键词分析
+            
+            # 提取帖子评论
+            comments = []
             try:
-                content_text = f"{title} {content}".strip()
-                if len(content_text) > 5:
-                    logger.info(f"对帖子 '{title}' 内容进行关键词分析")
-                    result["keyword_analysis"] = self.keyword_analyzer.analyze_text(
-                        content_text)
-
-                    if self.debug:
-                        keywords = result["keyword_analysis"].get(
-                            "keywords", [])
-                        if keywords:
-                            top_keywords = [
-                                f"{kw['word']}({kw['count']}次)" for kw in keywords[:5]]
-                            logger.info(
-                                f"帖子 '{title}' 提取到关键词: {', '.join(top_keywords)}")
-
-                        financial_terms = result["keyword_analysis"].get(
-                            "financial_terms", [])
-                        if financial_terms:
-                            logger.info(
-                                f"帖子 '{title}' 包含财经术语: {', '.join(financial_terms[:3])}")
-                else:
-                    logger.warning(f"帖子 '{title}' 内容过短，跳过关键词分析")
-            except Exception as e:
-                logger.error(f"对帖子 '{title}' 进行关键词分析时出错: {e}")
-                result["keyword_analysis"] = {
-                    "keywords": [], "has_financial_content": False}
-
-            # 获取评论并进行分析
-            try:
-                comments = self.get_comments(post_info.get("element"))
-                if comments:
-                    result["comments"] = comments
-                    result["has_comments"] = True
-                    logger.info(f"帖子 '{title}' 成功获取到 {len(comments)} 条评论")
-
-                    # 对评论进行情感分析
-                    try:
+                if comment_count > 0:
+                    logger.info(f"尝试获取帖子 '{title}' 的评论 (评论数: {comment_count})")
+                    # 提取评论
+                    comments = self.get_comments(post_info["element"])
+                    if comments:
+                        result["comments"] = comments
+                        result["has_comments"] = True
+                        
+                        # 分析评论情感
                         sentiment_score = self.analyze_sentiment(comments)
                         result["sentiment_score"] = sentiment_score
-                        result["sentiment_label"] = self._get_sentiment_label(
-                            sentiment_score)
-                        logger.info(
-                            f"帖子 '{title}' 情感分析得分: {sentiment_score}, 标签: {result['sentiment_label']}")
-                    except Exception as e:
-                        logger.error(f"对帖子 '{title}' 评论进行情感分析时出错: {e}")
-                        result["sentiment_score"] = 3  # 默认为中性
-                        result["sentiment_label"] = "中性"
-
-                    # 对评论内容进行关键词分析
-                    try:
-                        all_comments_text = " ".join(comments)
-                        comment_keywords = self.keyword_analyzer.analyze_text(
-                            all_comments_text)
-                        result["comment_keyword_analysis"] = comment_keywords
-
-                        if self.debug and comment_keywords.get("keywords"):
-                            top_comment_keywords = [f"{kw['word']}({kw['count']}次)"
-                                                    for kw in comment_keywords.get("keywords", [])[:3]]
-                            logger.info(
-                                f"帖子 '{title}' 评论中提取到关键词: {', '.join(top_comment_keywords)}")
-                    except Exception as e:
-                        logger.error(f"对帖子 '{title}' 评论进行关键词分析时出错: {e}")
-                        result["comment_keyword_analysis"] = {
-                            "keywords": [], "has_financial_content": False}
-
-                    # 如果使用DeepSeek进行情感分析
-                    if isinstance(self.sentiment_analyzer, DeepSeekSentimentAnalyzer):
-                        try:
-                            detailed_analysis = self.analyze_sentiment_with_deepseek(
-                                comments)
-                            if detailed_analysis:
-                                result["sentiment_analysis"] = detailed_analysis
-                                logger.info(f"帖子 '{title}' 完成DeepSeek情感分析")
-                        except Exception as e:
-                            logger.error(
-                                f"使用DeepSeek对帖子 '{title}' 进行情感分析时出错: {e}")
-                else:
-                    if comment_count > 0:
-                        logger.warning(
-                            f"帖子 '{title}' 评论数为{comment_count}，但未成功提取到评论")
+                        result["sentiment_label"] = self._get_sentiment_label(sentiment_score)
+                        
+                        logger.info(f"帖子 '{title}' 评论情感分数: {sentiment_score}, 标签: {result['sentiment_label']}")
+                        
+                        # 如果使用DeepSeek进行情感分析
+                        if isinstance(self.sentiment_analyzer, DeepSeekSentimentAnalyzer):
+                            try:
+                                detailed_analysis = self.analyze_sentiment_with_deepseek(
+                                    comments)
+                                if detailed_analysis:
+                                    result["sentiment_analysis"] = detailed_analysis
+                                    logger.info(f"帖子 '{title}' 完成DeepSeek情感分析")
+                            except Exception as e:
+                                logger.error(
+                                    f"使用DeepSeek对帖子 '{title}' 进行情感分析时出错: {e}")
                     else:
-                        logger.info(f"帖子 '{title}' 无评论")
+                        if comment_count > 0:
+                            logger.warning(
+                                f"帖子 '{title}' 评论数为{comment_count}，但未成功提取到评论")
             except Exception as e:
-                logger.error(f"处理帖子 '{title}' 评论时出错: {e}")
-
+                logger.error(f"提取帖子 '{title}' 评论时出错: {e}")
+            
             return result
-
+            
         except Exception as e:
             logger.error(f"分析帖子 '{title}' 时出错: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-
-            # 返回基本信息
             return {
                 "title": title,
                 "date": post_info.get("date", "未知日期"),
                 "time": post_info.get("time", "未知时间"),
-                "sentiment_score": 0,
-                "sentiment_label": "无评论",
-                "section": post_info.get("section", "未知板块"),
-                "comments": [],
-                "has_comments": False,
-                "keyword_analysis": {},
-                "comment_keyword_analysis": {}
+                "error": str(e)
             }
 
     def _get_sentiment_label(self, score: int) -> str:
@@ -779,17 +735,16 @@ class BaseTelegraphScraper(BaseScraper):
             market_sentiment = "看多" if sentiment_label == "正面" else "看空" if sentiment_label == "负面" else "观望"
 
             # 5. 组装详细分析结果
-            analysis_text = f"===== DeepSeek情感分析 ====="
-            analysis_text += f"整体评论情感: {sentiment_label}"
-            analysis_text += f"情感评分: {sentiment_score}/5"
-            analysis_text += f"情感分布: 正面 {positive_count}/{len(comments)}, 负面 {negative_count}/{len(comments)}, 中性 {neutral_count}/{len(comments)}"
+            analysis_text = f"【Deepseek】整体评论情感: {sentiment_label}\n"
+            analysis_text += f"【Deepseek】情感评分: {sentiment_score}\n"
+            analysis_text += f"【Deepseek】情感分布: 正面 {positive_count}/{len(comments)}, 负面 {negative_count}/{len(comments)}, 中性 {neutral_count}/{len(comments)}\n"
             if keywords:
-                analysis_text += f"关键词: {', '.join(keywords)}\n"
-            analysis_text += f"市场情绪: {market_sentiment}\n"
+                analysis_text += f"【Deepseek】关键词: {', '.join(keywords)}\n"
+            analysis_text += f"【Deepseek】市场情绪: {market_sentiment}\n"
 
             # 6. 添加评论示例
             if comments and len(comments) > 0:
-                analysis_text += "\n===== 评论示例 =====\n"
+                analysis_text += "关键的评论: \n"
                 # 最多显示5条评论
                 for i, comment in enumerate(comments[:5]):
                     analysis_text += f"{i+1}. {comment}\n"
@@ -817,7 +772,7 @@ class BaseTelegraphScraper(BaseScraper):
             try:
                 base_url = BASE_URL
                 current_url = self.page.url
-                
+
                 # 如果当前不在该网站，先导航到首页
                 if not current_url.startswith(base_url):
                     logger.info(f"导航到电报网站首页: {base_url}")
@@ -839,21 +794,22 @@ class BaseTelegraphScraper(BaseScraper):
 
             # 等待页面加载完成
             self.page.wait_for_load_state("networkidle", timeout=10000)
-            
+
             # 查看当前URL，判断是否已经在目标板块
             current_url = self.page.url
-            if f"{section}" in current_url.lower() or f"{section.lower()}" in current_url:
+            if f"{section}" in current_url.lower(
+            ) or f"{section.lower()}" in current_url:
                 logger.info(f"已经在 {section} 板块页面")
                 return True
-                
+
             # 增加匹配项：针对不同的拼写和表达方式
             section_variants = [
                 section,               # 原始名称
                 section.lower(),       # 小写
                 section.upper(),       # 大写
-                section.replace(' ', '') # 移除空格
+                section.replace(' ', '')  # 移除空格
             ]
-            
+
             # 尝试多种方式找到并点击板块链接
             section_selectors = []
             for variant in section_variants:
@@ -864,7 +820,7 @@ class BaseTelegraphScraper(BaseScraper):
                     f"[href*='{variant}']",          # URL匹配
                     f"[title*='{variant}']",         # 标题匹配
                     f"[data-id*='{variant}']",       # 数据ID匹配
-                    f"[class*='tab']:has-text('{variant}')" # 标签类匹配
+                    f"[class*='tab']:has-text('{variant}')"  # 标签类匹配
                 ])
 
             # 先获取并输出所有可能的导航元素，帮助调试
@@ -872,8 +828,8 @@ class BaseTelegraphScraper(BaseScraper):
                 all_links = self.page.evaluate("""
                     () => {
                         const links = Array.from(document.querySelectorAll('a'));
-                        return links.map(a => ({ 
-                            text: a.textContent.trim(), 
+                        return links.map(a => ({
+                            text: a.textContent.trim(),
                             href: a.href,
                             visible: a.offsetParent !== null
                         }));
@@ -882,7 +838,8 @@ class BaseTelegraphScraper(BaseScraper):
                 visible_links = [link for link in all_links if link['visible']]
                 logger.info(f"页面上找到 {len(visible_links)} 个可见链接:")
                 for link in visible_links[:10]:  # 只显示前10个，避免日志过长
-                    logger.info(f"  - 文本: '{link['text']}', 链接: {link['href']}")
+                    logger.info(
+                        f"  - 文本: '{link['text']}', 链接: {link['href']}")
 
             # 尝试使用选择器查找元素
             for selector in section_selectors:
@@ -959,7 +916,8 @@ class BaseTelegraphScraper(BaseScraper):
                         if self.verify_section_content(section):
                             logger.info(f"通过直接访问URL成功导航到 {section} 板块")
                             return True
-                    except:
+                    except Exception as e:
+                        logger.error(f"访问URL {url}时出错: {e}")
                         continue
             except Exception as e:
                 logger.error(f"尝试直接访问URL时出错: {e}")
@@ -994,10 +952,10 @@ class BaseTelegraphScraper(BaseScraper):
                         
                         if (matches && element.offsetParent !== null) { // 确保元素可见
                             element.click();
-                            return true;
+                                return true;
                         }
                     }
-                    return false;
+                            return false;
                 }
             """, section)
 
@@ -1061,7 +1019,7 @@ class BaseTelegraphScraper(BaseScraper):
                 # 如果是已知的板块，且我们在电报页面，假设导航成功
                 if section in ["看盘", "公司", "要闻", "科技"]:
                     return True
-            
+                
             return False
         except Exception as e:
             logger.error(f"验证导航结果时出错: {e}")
@@ -1093,7 +1051,7 @@ class BaseTelegraphScraper(BaseScraper):
                 # 初始化评论计数
                 comment_count = 0
                 element_text = element.inner_text()
-
+                
                 # 首先提取时间，判断是否是有效的帖子
                 time_match = re.search(r'(\d{2}:\d{2}:\d{2})', element_text)
                 if time_match:
@@ -1101,7 +1059,7 @@ class BaseTelegraphScraper(BaseScraper):
                 else:
                     # 如果没有时间，可能不是有效帖子
                     return result
-
+                
                 # 提取日期 (YYYY.MM.DD)
                 date_match = re.search(r'(\d{4}\.\d{2}\.\d{2})', element_text)
                 if date_match:
@@ -1111,23 +1069,23 @@ class BaseTelegraphScraper(BaseScraper):
                     today = datetime.datetime.now().strftime("%Y.%m.%d")
                     result["date"] = today
                     logger.debug(f"未找到日期，默认使用当天日期: {today}")
-
+                
                 # 尝试从标题格式判断是否为帖子
                 is_likely_post = False
-
+                
                 # 提取标题
                 title_patterns = [
                     r'【([^】]+)】',  # 尖括号格式
                     r'\[([^\]]+)\]',  # 方括号格式
                 ]
-
+                
                 for pattern in title_patterns:
                     match = re.search(pattern, element_text)
                     if match:
                         result["title"] = match.group(1)
                         is_likely_post = True
                         break
-
+                
                 # 提取评论数
                 comment_patterns = [
                     r'评论\s*[(\[](\d+)[)\]]',  # 评论(N) 或 评论[N]
@@ -1139,7 +1097,7 @@ class BaseTelegraphScraper(BaseScraper):
 
                 # 保存原始评论数，避免被后面的错误覆盖
                 original_comment_count = comment_count
-
+                
                 for pattern in comment_patterns:
                     match = re.search(pattern, element_text)
                     if match:
@@ -1147,7 +1105,7 @@ class BaseTelegraphScraper(BaseScraper):
                             comment_count = int(match.group(1))
                             if comment_count > 0 and comment_count < 1000:  # 过滤异常大的数字
                                 result["comment_count"] = comment_count
-                                break
+                            break
                         except (ValueError, IndexError):
                             pass
 
@@ -1157,20 +1115,20 @@ class BaseTelegraphScraper(BaseScraper):
 
                 # 设置帖子有效性
                 result["is_valid_post"] = is_likely_post or result["comment_count"] > 0
-
+                
                 return result
-
+                
             except Exception as e:
                 logger.error(f"提取帖子信息时出错: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
                 return result
-
+        
         except Exception as e:
             logger.error(f"提取帖子信息时出错: {e}")
             import traceback
             logger.error(traceback.format_exc())
-
+            
             # 返回基本信息，设置为无效帖子
             return {
                 "title": "未知标题",
@@ -1185,14 +1143,15 @@ class BaseTelegraphScraper(BaseScraper):
     def scrape_section(self, section: str) -> List[Dict[str, Any]]:
         """
         爬取指定板块的内容
-
+        
         Args:
             section: 板块名称，如"看盘"、"公司"等
-
+            
         Returns:
             List[Dict[str, Any]]: 爬取到的帖子列表
         """
         results = []
+        reached_cutoff = False  # 是否达到截止日期标志
 
         try:
             # 导航到指定板块
@@ -1200,95 +1159,148 @@ class BaseTelegraphScraper(BaseScraper):
                 logger.error(f"导航到 {section} 板块失败")
                 return results
 
-            # 等待页面加载完成
-            self.page.wait_for_load_state("networkidle", timeout=10000)
-            time.sleep(2)  # 额外等待以确保动态内容加载
+            # 记录已处理的帖子标题，避免重复处理
+            processed_titles = set()
 
-            # 使用多个选择器尝试获取帖子元素
-            post_selectors = [
-                "[class*='telegraph']",  # 通用选择器
-                "[class*='post']",
-                "[class*='article']",
-                "[class*='item']"
-            ]
+            # 循环加载并处理内容，直到达到截止日期或无法加载更多
+            while not reached_cutoff:
+                # 等待页面加载完成
+                self.page.wait_for_load_state("networkidle", timeout=10000)
+                time.sleep(2)  # 额外等待以确保动态内容加载
 
-            all_elements = []
-            for selector in post_selectors:
-                try:
-                    elements = self.page.query_selector_all(selector)
-                    if elements:
+                # 使用多个选择器尝试获取帖子元素
+                post_selectors = [
+                    "[class*='telegraph']",  # 通用选择器
+                    "[class*='post']",
+                    "[class*='article']",
+                    "[class*='item']"
+                ]
+
+                all_elements = []
+                for selector in post_selectors:
+                    try:
+                        elements = self.page.query_selector_all(selector)
+                        if elements:
+                            if self.debug:
+                                logger.info(
+                                    f"使用选择器 '{selector}' 找到 {len(elements)} 个电报项")
+                            all_elements.extend(elements)
+                    except Exception as e:
                         if self.debug:
-                            logger.info(
-                                f"使用选择器 '{selector}' 找到 {len(elements)} 个电报项")
-                        all_elements.extend(elements)
-                except Exception as e:
-                    if self.debug:
-                        logger.error(f"使用选择器 '{selector}' 查找元素时出错: {e}")
+                            logger.error(f"使用选择器 '{selector}' 查找元素时出错: {e}")
 
-            # 去重
-            unique_elements = list(set(all_elements))
-            if self.debug:
-                logger.info(f"总共找到 {len(unique_elements)} 个电报项")
+                # 去重
+                unique_elements = list(set(all_elements))
+                if self.debug:
+                    logger.info(f"总共找到 {len(unique_elements)} 个电报项")
 
-            # 如果没有找到任何元素，尝试使用JavaScript
-            if not unique_elements:
-                try:
-                    js_elements = self.page.evaluate("""
-                        () => {
-                            const results = [];
-                            const possibleSelectors = [
-                                '[class*="telegraph"]',
-                                '[class*="post"]',
-                                '[class*="article"]',
-                                '[class*="item"]'
-                            ];
-                            
-                            for (const selector of possibleSelectors) {
-                                const elements = document.querySelectorAll(selector);
-                                elements.forEach(el => results.push(el));
+                # 如果没有找到任何元素，尝试使用JavaScript
+                if not unique_elements:
+                    try:
+                        js_elements = self.page.evaluate("""
+                            () => {
+                                const results = [];
+                                const possibleSelectors = [
+                                    '[class*="telegraph"]',
+                                    '[class*="post"]',
+                                    '[class*="article"]',
+                                    '[class*="item"]'
+                                ];
+                                
+                                for (const selector of possibleSelectors) {
+                                    const elements = document.querySelectorAll(selector);
+                                    elements.forEach(el => results.push(el));
+                                }
+                                
+                                return results;
                             }
-                            
-                            return results;
-                        }
-                    """)
-                    if js_elements:
-                        unique_elements = js_elements
+                        """)
+                        if js_elements:
+                            unique_elements = js_elements
+                            if self.debug:
+                                logger.info(
+                                    f"通过JavaScript找到 {len(js_elements)} 个电报项")
+                    except Exception as e:
                         if self.debug:
-                            logger.info(
-                                f"通过JavaScript找到 {len(js_elements)} 个电报项")
-                except Exception as e:
-                    if self.debug:
-                        logger.error(f"使用JavaScript查找元素时出错: {e}")
+                            logger.error(f"使用JavaScript查找元素时出错: {e}")
 
-            # 处理每个帖子
-            for element in unique_elements:
+                # 处理每个帖子
+                for element in unique_elements:
+                    try:
+                        # 等待元素可见和可交互
+                        element.wait_for_element_state("visible", timeout=5000)
+
+                        # 提取帖子信息
+                        post_info = self.extract_post_info(element)
+
+                        # 设置板块信息
+                        post_info["section"] = section
+                        
+                        # 检查是否已处理过该帖子
+                        if post_info.get("title") in processed_titles:
+                            continue
+                            
+                        processed_titles.add(post_info.get("title", ""))
+
+                        # 检查帖子日期是否在截止日期后
+                        if post_info.get("date") and post_info.get("time"):
+                            try:
+                                post_date_str = f"{post_info['date']} {post_info['time']}"
+                                post_date = datetime.datetime.strptime(post_date_str, "%Y.%m.%d %H:%M:%S")
+                                
+                                # 如果帖子日期早于截止日期，标记为已达到截止日期
+                                if post_date < self.cutoff_date:
+                                    if self.debug:
+                                        logger.info(f"帖子日期 {post_date_str} 早于截止日期 {self.cutoff_date}，设置达到截止日期标志")
+                                    reached_cutoff = True
+                                    break
+                            except Exception as e:
+                                if self.debug:
+                                    logger.error(f"解析帖子日期时出错: {e}")
+
+                        # 如果是有效帖子，进行情感分析
+                        if post_info["is_valid_post"]:
+                            # 分析帖子
+                            analyzed_info = self.analyze_post(post_info)
+                            if analyzed_info:
+                                results.append(analyzed_info)
+                    
+                    except Exception as e:
+                        if self.debug:
+                            logger.error(f"处理帖子元素时出错: {e}")
+                        continue
+
+                # 如果已达到截止日期，停止加载更多
+                if reached_cutoff:
+                    if self.debug:
+                        logger.info("已达到截止日期，停止加载更多内容")
+                    break
+                
+                # 尝试加载更多内容
                 try:
-                    # 等待元素可见和可交互
-                    element.wait_for_element_state("visible", timeout=5000)
-
-                    # 提取帖子信息
-                    post_info = self.extract_post_info(element)
-
-                    # 设置板块信息
-                    post_info["section"] = section
-
-                    # 如果是有效帖子，进行情感分析
-                    if post_info["is_valid_post"]:
-                        # 分析帖子
-                        analyzed_info = self.analyze_post(post_info)
-                        if analyzed_info:
-                            results.append(analyzed_info)
-
+                    # 使用PostExtractor的load_more_posts方法
+                    extractor = PostExtractor()
+                    more_loaded = extractor.load_more_posts(self.page)
+                    
+                    if not more_loaded:
+                        if self.debug:
+                            logger.info("无法加载更多内容，结束爬取")
+                        break
+                        
+                    # 等待新内容加载
+                    self.page.wait_for_load_state("networkidle", timeout=5000)
+                    time.sleep(2)
+                    
                 except Exception as e:
                     if self.debug:
-                        logger.error(f"处理帖子元素时出错: {e}")
-                    continue
+                        logger.error(f"尝试加载更多内容时出错: {e}")
+                    break
 
             if self.debug:
                 logger.info(f"成功分析 {len(results)} 个有效电报项")
 
             return results
-
+                
         except Exception as e:
             logger.error(f"爬取 {section} 板块时出错: {e}")
             return results

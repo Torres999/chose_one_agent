@@ -151,7 +151,7 @@ class DeepSeekSentimentAnalyzer:
                     return {"label": "正面", "score": 4}
                 elif "负面" in content.lower() or "消极" in content.lower() or "看空" in content.lower():
                     return {"label": "负面", "score": 2}
-                else:
+            else:
                     return {"label": "中性", "score": 3}
                 
         except Exception as e:

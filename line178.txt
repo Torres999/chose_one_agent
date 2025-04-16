@@ -1,1 +1,0 @@
-                        result["is_valid_post"] = True

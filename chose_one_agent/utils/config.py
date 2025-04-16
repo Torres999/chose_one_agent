@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv(verbose=True)
 
 # 网站基础URL
-BASE_URL = "https://www.cls.cn"
+BASE_URL = "https://www..cn"
 
 # DeepSeek API配置
 # 获取环境变量中的API密钥，如果不存在则使用默认值

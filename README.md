@@ -13,42 +13,38 @@
 - 输出格式化的结果
 
 ## 项目的主要功能和组件：
-1. 基础爬虫模块 (base_scraper.py):
-   - 提供共用的网页交互功能
-   - 可被不同功能模块继承使用
-   - 创建了基础爬虫类"BaseScraper"作为公共基类
+1. 主程序 (main.py):
+   - 解析命令行参数
+   - 配置日志记录
+   - 解析截止日期
+   - 初始化爬虫
+   - 格式化和输出结果
+   
+2. 爬虫基础模块 (scrapers/):
+   - 提供所有爬虫的基类和通用功能
+   - 定义通用选择器和页面交互方法
 
-2. 模块化系统设计:
-   - 采用模块化设计，增加了"modules"目录
-   - 将电报功能放在"telegraph"模块中
-   - 添加了"watch_plate"模块用于盯盘功能
-   - 更新了主程序以支持选择运行特定模块
+3. 电报爬虫模块 (modules/telegraph/)
+   - xtelegraph_scraper.py: 协调不同板块爬虫的主类
+   - post_extractor.py: 专注于帖子信息提取
+   - comment_extractor.py: 专注于评论提取
+   - navigation.py: 处理页面导航和板块定位
 
-3. 电报模块 (telegraph_scraper.py):
-   - 自动导航到ChoseOne.cn网站的"电报"下的"看盘"和"公司"板块
-   - 逐个读取电报内容，直到达到指定的截止日期
-   - 对有评论的电报进行评论抓取和情感分析
+5. 情感分析模块 (modules/sentiment/)
+   - base_analyzer.py: 情感分析基类
+   - snownlp_analyzer.py: 简单情感分析实现
+   - deepseek_analyzer.py: DeepSeek API集成
+   - 关键词分析模块 (analyzers/keyword_analyzer.py)
 
-4. 盯盘模块 (watch_plate_scraper.py):
-   - 自动导航到ChoseOne.cn网站的"盯盘"板块
-   - 分析盯盘内容和评论
+6. 关键词分析模块 (analyzers/keyword_analyzer.py)
+   - 文本清理
+   - 关键词提取和排序
+   - 财经术语检测
 
-5. 情感分析模块:
-   - SnowNLP情感分析器 (sentiment_analyzer.py):
-     - 使用SnowNLP进行本地中文情感分析
-     - 对多条评论进行综合分析，得出整体情感倾向
-   - DeepSeek情感分析器 (deepseek_sentiment_analyzer.py):
-     - 使用DeepSeek API进行更准确的中文情感分析
-     - 支持批量分析多条评论，提高效率
-
-6. 辅助工具模块 (helpers.py):
-   - 日期时间处理
-   - 格式化输出结果
-
-7. 主程序 (main.py):
-   - 处理命令行参数
-   - 协调各个模块的运行
-   - 格式化并输出最终结果
+7. 工具模块 (utils/)
+   - 日期处理
+   - 文本处理
+   - 辅助函数
 
 ## 安装
 
