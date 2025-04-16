@@ -13,6 +13,7 @@ from chose_one_agent.utils.helpers import parse_datetime, is_before_cutoff, extr
 from chose_one_agent.analyzers.sentiment_analyzer import SentimentAnalyzer
 from chose_one_agent.analyzers.deepseek_sentiment_analyzer import DeepSeekSentimentAnalyzer
 from chose_one_agent.analyzers.keyword_analyzer import KeywordAnalyzer
+from chose_one_agent.utils.config import BASE_URL
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -145,7 +146,7 @@ class BaseTelegraphScraper(BaseScraper):
                 comment_count = original_comment_count
 
             # 针对特定网站的专门处理
-            if "telegraph-site.cn/telegraph" in current_url:
+            if f"{BASE_URL}/telegraph" in current_url:
                 # 1. 尝试从当前页面获取评论详情链接
                 detail_url = None
                 try:
@@ -155,7 +156,7 @@ class BaseTelegraphScraper(BaseScraper):
                             href = comment_link.get_attribute("href")
                             if href and "/detail/" in href:
                                 if not href.startswith("http"):
-                                    detail_url = f"https://www.telegraph-site.cn{href}"
+                                    detail_url = f"{BASE_URL}{href}"
                                 else:
                                     detail_url = href
                                 if self.debug:
@@ -352,7 +353,7 @@ class BaseTelegraphScraper(BaseScraper):
                             # 关键修复：避免把年份等大数字误认为是评论数
                             # 如果ID超过10000，可能不是真正的ID，而是年份等其他数字
                             if telegraph_id and len(telegraph_id) <= 5:
-                                detail_url = f"https://www.telegraph-site.cn/detail/{telegraph_id}"
+                                detail_url = f"{BASE_URL}/detail/{telegraph_id}"
 
                                 if self.debug:
                                     logger.info(f"尝试通过ID直接访问评论页: {detail_url}")
@@ -814,7 +815,7 @@ class BaseTelegraphScraper(BaseScraper):
         try:
             # 首先访问基本URL
             try:
-                base_url = "https://www.telegraph-site.cn"
+                base_url = BASE_URL
                 current_url = self.page.url
                 
                 # 如果当前不在该网站，先导航到首页
@@ -827,7 +828,7 @@ class BaseTelegraphScraper(BaseScraper):
                 logger.error(f"导航到首页时出错: {e}")
                 # 尝试直接访问目标页面
                 try:
-                    section_url = f"{base_url}/telegraph"
+                    section_url = f"{BASE_URL}/telegraph"
                     logger.info(f"尝试直接导航到电报页面: {section_url}")
                     self.page.goto(section_url, timeout=15000)
                     self.page.wait_for_load_state("networkidle", timeout=10000)
@@ -1044,7 +1045,7 @@ class BaseTelegraphScraper(BaseScraper):
                 return True
                 
             # 如果在电报页面上，我们认为导航成功
-            if "telegraph" in url.lower() or "telegraph-site.cn" in url.lower():
+            if "telegraph" in url.lower() or f"{BASE_URL}".lower() in url.lower():
                 # 获取所有可能与板块相关的文本
                 headings = self.page.evaluate("""
                     () => {

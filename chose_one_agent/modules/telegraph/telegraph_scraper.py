@@ -77,7 +77,7 @@ class TelegraphScraper:
                     try:
                         page = context.new_page()
                         logger.info("导航到电报网站首页...")
-                        page.goto("https://www.telegraph-site.cn", timeout=15000)
+                        page.goto(BASE_URL, timeout=15000)
                         page.wait_for_load_state("networkidle", timeout=10000)
                         time.sleep(2)
                         
@@ -90,7 +90,7 @@ class TelegraphScraper:
                             time.sleep(2)
                         else:
                             logger.info("未找到电报链接，尝试直接导航到电报页面...")
-                            page.goto("https://www.telegraph-site.cn/telegraph", timeout=15000)
+                            page.goto(f"{BASE_URL}/telegraph", timeout=15000)
                             page.wait_for_load_state("networkidle", timeout=10000)
                             time.sleep(2)
                             
@@ -157,7 +157,7 @@ class TelegraphScraper:
                         try:
                             # 首先尝试直接访问板块页面
                             try:
-                                section_url = f"https://www.telegraph-site.cn/telegraph"
+                                section_url = f"{BASE_URL}/telegraph"
                                 logger.info(f"直接导航到电报页面: {section_url}")
                                 scraper.page.goto(section_url, timeout=15000)
                                 scraper.page.wait_for_load_state("networkidle", timeout=10000)

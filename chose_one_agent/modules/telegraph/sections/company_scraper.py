@@ -5,6 +5,7 @@ import time
 from typing import List, Dict, Any
 
 from chose_one_agent.modules.telegraph.base_telegraph_scraper import BaseTelegraphScraper
+from chose_one_agent.utils.config import BASE_URL
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ class CompanyScraper(BaseTelegraphScraper):
         # 直接导航到电报页面
         try:
             # 尝试直接访问特定页面
-            self.page.goto("https://www.telegraph-site.cn/telegraph", timeout=15000)
+            self.page.goto(f"{BASE_URL}/telegraph", timeout=15000)
             self.page.wait_for_load_state("networkidle", timeout=10000)
             time.sleep(2)
             

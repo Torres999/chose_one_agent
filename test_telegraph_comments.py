@@ -14,8 +14,9 @@ from datetime import datetime
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from playwright.sync_api import sync_playwright
+from chose_one_agent.utils.config import BASE_URL
 
-def collect_comment_elements(url="https://www.telegraph-site.cn/telegraph"):
+def collect_comment_elements(url=f"{BASE_URL}/telegraph"):
     """收集电报网站的评论元素信息"""
     with sync_playwright() as playwright:
         # 初始化浏览器
