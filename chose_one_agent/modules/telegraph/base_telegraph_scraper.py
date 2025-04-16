@@ -84,26 +84,114 @@ class BaseTelegraphScraper(BaseScraper):
             except Exception:
                 pass
             
-            # 检查是否有评论计数
+            # 检查是否有评论计数 - 增强版
             comment_count = 0
             try:
-                text = post_element.inner_text()
-                # 查找评论计数格式如：评论(1)、评论(32)、评论（10）
-                comment_count_match = re.search(r'评论.*?[（(](\d+)[)）]', text)
-                if comment_count_match:
-                    comment_count = int(comment_count_match.group(1))
-                    if comment_count == 0:
-                        logger.info("帖子评论计数为0，无需获取评论")
-                        return []
-                    logger.info(f"从帖子文本中提取到评论计数: {comment_count}")
-            except Exception as e:
-                logger.debug(f"提取评论计数失败: {e}")
+                # 1. 先获取并记录完整的元素文本，便于调试
+                element_text = post_element.inner_text()
+                logger.debug(f"帖子完整文本: {element_text}")
                 
-            # 无评论情况提前返回
+                # 2. 添加更强的正则表达式匹配模式
+                comment_count_patterns = [
+                    r'评论.*?[（(](\d+)[)）]',  # 更宽松的匹配，包括中英文括号和中间可能的空格或其他字符
+                    r'评论\s*[(\[](\d+)[)\]]',  # 评论(N) 或 评论[N]
+                    r'评论[：:]\s*(\d+)',      # 评论: N 或 评论：N
+                    r'评论\((\d+)\)',         # 评论(N)
+                    r'评论\s*(\d+)',          # 评论 N
+                    r'评论.*?(\d+)'           # 极宽松匹配，评论后面出现的任何数字
+                ]
+                
+                # 3. 尝试所有模式并记录匹配情况
+                for i, pattern in enumerate(comment_count_patterns):
+                    comment_count_match = re.search(pattern, element_text)
+                    if comment_count_match:
+                        try:
+                            found_count = int(comment_count_match.group(1))
+                            logger.info(f"使用模式[{i+1}]从帖子文本中提取到评论计数: {found_count}")
+                            comment_count = found_count
+                            break
+                        except (ValueError, IndexError) as e:
+                            logger.debug(f"模式[{i+1}]匹配到内容，但无法转换为数字: {e}")
+                
+                # 4. 如果以上模式都没有匹配成功，尝试直接搜索评论相关元素
+                if comment_count == 0:
+                    logger.info("未通过正则表达式找到评论计数，尝试通过元素查找")
+                    try:
+                        # 尝试查找评论数元素
+                        count_selectors = [
+                            "span.evaluate-count", 
+                            "[class*='comment-count']", 
+                            "[class*='evaluate-count']",
+                            "span:has-text('评论')", 
+                            "div:has-text('评论')"
+                        ]
+                        
+                        for selector in count_selectors:
+                            count_elements = post_element.query_selector_all(selector)
+                            for j, element in enumerate(count_elements):
+                                element_text = element.inner_text().strip()
+                                logger.info(f"找到可能的评论计数元素[{j+1}]: '{element_text}'")
+                                
+                                # 尝试从元素文本中提取数字
+                                for pattern in comment_count_patterns:
+                                    matches = re.search(pattern, element_text)
+                                    if matches:
+                                        try:
+                                            extracted_count = int(matches.group(1))
+                                            logger.info(f"从评论元素中提取到评论计数: {extracted_count}")
+                                            comment_count = extracted_count
+                                            break
+                                        except (ValueError, IndexError):
+                                            pass
+                                
+                                if comment_count > 0:
+                                    break
+                            
+                            if comment_count > 0:
+                                break
+                    except Exception as e:
+                        logger.debug(f"通过元素查找评论计数时出错: {e}")
+                
+                # 如果找到非零评论计数，记录日志
+                if comment_count > 0:
+                    logger.info(f"帖子最终评论计数: {comment_count}")
+                else:
+                    # 尝试从页面全局内容中查找与当前帖子关联的评论计数
+                    try:
+                        # 搜索页面上所有文本节点
+                        page_text = self.page.evaluate("() => document.body.innerText")
+                        title_fragment = current_title[:10] if current_title and len(current_title) > 10 else current_title
+                        
+                        if title_fragment:
+                            logger.info(f"尝试在页面文本中查找标题片段 '{title_fragment}' 附近的评论计数")
+                            # 在页面文本中寻找标题片段附近的评论计数
+                            title_pos = page_text.find(title_fragment)
+                            if title_pos >= 0:
+                                nearby_text = page_text[max(0, title_pos-100):min(len(page_text), title_pos+300)]
+                                logger.debug(f"标题附近文本: {nearby_text}")
+                                
+                                for pattern in comment_count_patterns:
+                                    matches = re.search(pattern, nearby_text)
+                                    if matches:
+                                        try:
+                                            extracted_count = int(matches.group(1))
+                                            logger.info(f"从页面文本中提取到评论计数: {extracted_count}")
+                                            comment_count = extracted_count
+                                            break
+                                        except (ValueError, IndexError):
+                                            pass
+                    except Exception as e:
+                        logger.debug(f"搜索页面文本中的评论计数时出错: {e}")
+            except Exception as e:
+                logger.debug(f"提取评论计数过程中出错: {e}")
+                
+            # 如果评论计数确实为0，提前返回
             if comment_count <= 0:
                 logger.info("评论计数为0或无法获取，跳过处理")
                 return []
-                
+            else:
+                logger.info(f"确认帖子有{comment_count}条评论，继续处理")
+            
             # 特殊处理CLS电报站点评论
             if "cls.cn/telegraph" in self.page.url:
                 logger.info("检测到cls.cn/telegraph网站，使用特定方法获取评论")
@@ -120,9 +208,13 @@ class BaseTelegraphScraper(BaseScraper):
                         # 尝试使用更宽松的模式匹配评论计数
                         all_comment_counts = re.findall(r'评论.*?[（(](\d+)[)）]', page_text)
                         for count in all_comment_counts:
-                            if int(count) > 0:
-                                logger.info(f"在页面文本中找到评论计数: {count}")
-                                comment_count = max(comment_count, int(count))
+                            try:
+                                count_value = int(count)
+                                if count_value > 0:
+                                    logger.info(f"在页面文本中找到评论计数: {count}")
+                                    comment_count = max(comment_count, count_value)
+                            except ValueError:
+                                pass
                     except Exception as e:
                         logger.debug(f"检查页面文本中的评论计数失败: {e}")
                         
@@ -133,23 +225,86 @@ class BaseTelegraphScraper(BaseScraper):
                         
                     # 在cls.cn网站，尝试特定的评论元素查找策略
                     try:
-                        # 查找类似截图中评论计数的元素
-                        comment_elements = self.page.query_selector_all("span.evaluate-count, span:has-text('评论'), div:has-text('评论')")
+                        # 增强评论元素选择器 - 更全面的选择器
+                        comment_selectors = [
+                            "span.evaluate-count", 
+                            "span:has-text('评论')", 
+                            "div:has-text('评论')",
+                            ".comment-count",
+                            "[class*='comment']",
+                            "[class*='evaluate']",
+                            "span:has-text(/评论.*?[0-9]+/)"
+                        ]
                         
+                        comment_elements = []
+                        # 尝试每个选择器
+                        for selector in comment_selectors:
+                            try:
+                                elements = self.page.query_selector_all(selector)
+                                if elements and len(elements) > 0:
+                                    logger.info(f"使用选择器 '{selector}' 找到 {len(elements)} 个可能的评论元素")
+                                    comment_elements.extend(elements)
+                            except Exception as e:
+                                logger.debug(f"使用选择器 '{selector}' 查找元素时出错: {e}")
+                        
+                        # 去重，避免重复元素
+                        unique_elements = []
+                        seen_texts = set()
+                        
+                        for element in comment_elements:
+                            try:
+                                element_text = element.inner_text().strip()
+                                if element_text and element_text not in seen_texts:
+                                    unique_elements.append(element)
+                                    seen_texts.add(element_text)
+                            except Exception:
+                                pass
+                        
+                        logger.info(f"去重后找到 {len(unique_elements)} 个可能的评论元素")
+                        comment_elements = unique_elements
+                                                    
                         # 对每个找到的评论元素进行分析
                         for i, element in enumerate(comment_elements):
                             try:
                                 # 获取元素文本看是否包含评论计数
                                 element_text = element.inner_text().strip()
-                                logger.info(f"找到可能的评论元素 [{i+1}/{len(comment_elements)}]: {element_text}")
+                                logger.info(f"分析可能的评论元素 [{i+1}/{len(comment_elements)}]: {element_text}")
                                 
                                 # 检查元素文本是否表明评论为0
                                 if re.search(r'评论.*?[（(]0[)）]', element_text) or "暂无评论" in element_text:
                                     logger.info(f"元素 [{i+1}] 文本表明评论为0，跳过: {element_text}")
                                     continue
-                
+                                    
+                                # 获取元素的计算样式，帮助判断其可见性
+                                try:
+                                    is_visible = self.page.evaluate("""
+                                        (element) => {
+                                            const style = window.getComputedStyle(element);
+                                            return style.display !== 'none' && 
+                                                   style.visibility !== 'hidden' && 
+                                                   style.opacity !== '0';
+                                        }
+                                    """, element)
+                                        
+                                    if not is_visible:
+                                        logger.info(f"元素 [{i+1}] 不可见，跳过")
+                                        continue
+                                except Exception:
+                                    # 忽略样式检查错误，继续处理
+                                    pass
+                    
                                 # 分析元素点击交互
                                 logger.info(f"对元素 [{i+1}] 进行点击交互分析...")
+                                
+                                # 记录元素位置和外观，便于调试
+                                try:
+                                    bbox = element.bounding_box()
+                                    if bbox:
+                                        logger.debug(f"元素位置: x={bbox['x']}, y={bbox['y']}, " +
+                                                   f"width={bbox['width']}, height={bbox['height']}")
+                                except Exception:
+                                    pass
+                                        
                                 interaction_result = self.analyze_comment_interaction(element)
                                 
                                 if interaction_result:
@@ -1037,157 +1192,298 @@ class BaseTelegraphScraper(BaseScraper):
     
     def analyze_comment_interaction(self, comment_element):
         """
-        分析评论点击交互，记录点击前后的DOM变化
+        分析评论元素的交互，尝试点击评论按钮并提取评论内容
         
         Args:
-            comment_element: 评论按钮元素
-        
+            comment_element: 评论元素
+            
         Returns:
-            交互分析结果字典
+            分析结果字典或None
         """
-        timestamp = int(time.time())
-        log_prefix = f"/tmp/cls_interaction_{timestamp}"
-        
         try:
-            # 记录点击前的信息
-            logger.info("记录评论点击前的页面状态...")
-            before_screenshot = f"{log_prefix}_before_click.png"
-            self.page.screenshot(path=before_screenshot)
+            logger.info("开始分析评论元素交互...")
             
-            before_html = self.page.content()
-            before_html_path = f"{log_prefix}_before_click.html"
-            with open(before_html_path, "w", encoding="utf-8") as f:
-                f.write(before_html)
-            
-            # 提取点击前的评论相关元素
-            before_elements = self.page.evaluate("""
-                () => {
-                    const results = [];
-                    const elements = document.querySelectorAll('[class*="comment"], [class*="evaluate"]');
-                    for (const el of elements) {
-                        if (el.innerText) {
-                            results.push({
-                                tag: el.tagName,
-                                className: el.className,
-                                text: el.innerText.substring(0, 50),
-                                isVisible: el.offsetParent !== null
-                            });
-                        }
-                    }
-                    return results;
-                }
-            """)
-            
-            # 存储点击前评论元素信息
-            before_elements_path = f"{log_prefix}_before_elements.json"
-            with open(before_elements_path, "w", encoding="utf-8") as f:
-                json.dump(before_elements, f, ensure_ascii=False, indent=2)
-            
-            # 获取要点击的元素信息
-            element_info = {
-                "text": comment_element.inner_text().strip(),
-                "className": comment_element.get_attribute("class"),
-                "tagName": comment_element.evaluate("el => el.tagName")
+            # 初始化结果
+            result = {
+                "new_elements_count": 0,
+                "possible_comments_count": 0,
+                "comments": ""
             }
-            logger.info(f"尝试点击评论元素: {element_info}")
             
-            # 尝试点击评论元素
-            comment_element.click()
-            logger.info("已点击评论元素，等待2秒加载...")
-            time.sleep(2)  # 等待交互响应
+            # 检查元素是否可见和可点击
+            is_visible = False
+            try:
+                bbox = comment_element.bounding_box()
+                is_visible = bbox and bbox["width"] > 0 and bbox["height"] > 0
+                if not is_visible:
+                    logger.warning("评论元素不可见，无法进行交互")
+                    return None
+            except Exception as e:
+                logger.warning(f"检查元素可见性失败: {e}")
+                # 继续尝试，可能仍然可以点击
             
-            # 记录点击后的信息
-            logger.info("记录评论点击后的页面状态...")
-            after_screenshot = f"{log_prefix}_after_click.png"
-            self.page.screenshot(path=after_screenshot)
+            # 保存点击前的时间戳用于文件名
+            timestamp = int(time.time())
+            log_prefix = f"/tmp/comment_interaction_{timestamp}"
             
-            after_html = self.page.content()
-            after_html_path = f"{log_prefix}_after_click.html"
-            with open(after_html_path, "w", encoding="utf-8") as f:
-                f.write(after_html)
+            # 保存点击前的页面截图
+            try:
+                before_screenshot_path = f"{log_prefix}_before.png"
+                self.page.screenshot(path=before_screenshot_path)
+                logger.info(f"已保存点击前的页面截图: {before_screenshot_path}")
+            except Exception as e:
+                logger.debug(f"保存点击前截图失败: {e}")
             
-            # 提取点击后的评论相关元素
-            after_elements = self.page.evaluate("""
-                () => {
-                    const results = [];
-                    const elements = document.querySelectorAll('[class*="comment"], [class*="evaluate"]');
-                    for (const el of elements) {
-                        if (el.innerText) {
-                            results.push({
-                                tag: el.tagName,
-                                className: el.className,
-                                text: el.innerText.substring(0, 50),
-                                isVisible: el.offsetParent !== null
-                            });
-                        }
-                    }
-                    return results;
-                }
-            """)
-            
-            # 存储点击后评论元素信息
-            after_elements_path = f"{log_prefix}_after_elements.json"
-            with open(after_elements_path, "w", encoding="utf-8") as f:
-                json.dump(after_elements, f, ensure_ascii=False, indent=2)
-            
-            # 分析元素变化
-            new_elements_count = len(after_elements) - len(before_elements)
-            logger.info(f"点击后元素数量变化: {new_elements_count} (前: {len(before_elements)}, 后: {len(after_elements)})")
-            
-            # 获取页面上所有可能的评论内容
-            possible_comments = self.page.evaluate("""
-                () => {
-                    const results = [];
-                    // 尝试各种可能的评论内容选择器
-                    const commentSelectors = [
-                        '.comment-item', '.comment-text', '.comment-content',
-                        '.evaluate-content', '.comment-body', '[class*="comment-"]',
-                        // 更通用的文本选择器
-                        'p', 'div'
-                    ];
-                    
-                    for (const selector of commentSelectors) {
-                        const elements = document.querySelectorAll(selector);
-                        for (const el of elements) {
+            # 保存点击前的页面元素数量
+            before_elements = []
+            try:
+                before_elements = self.page.evaluate("""
+                    () => {
+                        const allElements = document.querySelectorAll('*');
+                        const results = [];
+                        for (let i = 0; i < Math.min(allElements.length, 1000); i++) {
+                            const el = allElements[i];
                             const text = el.innerText?.trim();
-                            if (text && text.length > 5 && text.length < 500 && 
-                                !text.includes('评论') && !text.includes('登录') && !text.includes('注册')) {
+                            if (text && text.length > 0 && text.length < 200) {
                                 results.push({
-                                    selector: selector,
-                                    text: text,
-                                    className: el.className,
-                                    isNew: !el.hasAttribute('data-seen')  // 简单标记是否是新元素
+                                    tag: el.tagName,
+                                    text: text.length > 100 ? text.substring(0, 100) + '...' : text,
+                                    className: el.className
                                 });
-                                // 标记已处理过
+                            }
+                        }
+                        return results;
+                    }
+                """)
+                
+                before_elements_path = f"{log_prefix}_before_elements.json"
+                with open(before_elements_path, "w", encoding="utf-8") as f:
+                    json.dump(before_elements, f, ensure_ascii=False, indent=2)
+                
+                logger.info(f"点击前页面有 {len(before_elements)} 个文本元素")
+            except Exception as e:
+                logger.warning(f"获取点击前元素失败: {e}")
+            
+            # 尝试使用多种方式点击元素
+            click_success = False
+            try:
+                # 方式1：直接点击
+                try:
+                    logger.info("尝试直接点击评论元素")
+                    comment_element.click(timeout=5000)
+                    click_success = True
+                    logger.info("直接点击评论元素成功")
+                except Exception as e:
+                    logger.debug(f"直接点击失败: {e}")
+                    
+                    # 方式2：使用JavaScript点击
+                    if not click_success:
+                        try:
+                            logger.info("尝试使用JavaScript点击评论元素")
+                            self.page.evaluate("(element) => element.click()", comment_element)
+                            click_success = True
+                            logger.info("JavaScript点击评论元素成功")
+                        except Exception as e:
+                            logger.debug(f"JavaScript点击失败: {e}")
+                    
+                    # 方式3：模拟移动鼠标并点击
+                    if not click_success:
+                        try:
+                            logger.info("尝试通过鼠标移动点击评论元素")
+                            bbox = comment_element.bounding_box()
+                            if bbox:
+                                x = bbox["x"] + bbox["width"] / 2
+                                y = bbox["y"] + bbox["height"] / 2
+                                self.page.mouse.move(x, y)
+                                self.page.mouse.click(x, y)
+                                click_success = True
+                                logger.info(f"鼠标点击评论元素成功 (x={x}, y={y})")
+                        except Exception as e:
+                            logger.debug(f"鼠标移动点击失败: {e}")
+                
+                if not click_success:
+                    logger.warning("所有点击方法均失败")
+                    return None
+                
+                # 等待点击后的页面加载或变化
+                try:
+                    # 等待网络空闲、DOM变化或新元素出现
+                    self.page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    # 即使等待超时，也继续处理，因为可能已经有变化
+                    pass
+                
+                # 确保足够的等待时间让评论加载
+                time.sleep(2)
+                
+                # 保存点击后的页面截图
+                try:
+                    after_screenshot_path = f"{log_prefix}_after.png"
+                    self.page.screenshot(path=after_screenshot_path)
+                    logger.info(f"已保存点击后的页面截图: {after_screenshot_path}")
+                except Exception as e:
+                    logger.debug(f"保存点击后截图失败: {e}")
+                
+                # 保存点击后的页面元素
+                after_elements = []
+                try:
+                    after_elements = self.page.evaluate("""
+                        () => {
+                            const allElements = document.querySelectorAll('*');
+                            const results = [];
+                            for (let i = 0; i < Math.min(allElements.length, 1000); i++) {
+                                const el = allElements[i];
+                                const text = el.innerText?.trim();
+                                if (text && text.length > 0 && text.length < 200) {
+                                    results.push({
+                                        tag: el.tagName,
+                                        text: text.length > 100 ? text.substring(0, 100) + '...' : text,
+                                        className: el.className
+                                    });
+                                }
+                            }
+                            return results;
+                        }
+                    """)
+                except Exception as e:
+                    logger.warning(f"获取点击后元素失败: {e}")
+                    after_elements = []
+                
+                after_elements_path = f"{log_prefix}_after_elements.json"
+                with open(after_elements_path, "w", encoding="utf-8") as f:
+                    json.dump(after_elements, f, ensure_ascii=False, indent=2)
+                
+                # 分析元素变化
+                new_elements_count = len(after_elements) - len(before_elements)
+                logger.info(f"点击后元素数量变化: {new_elements_count} (前: {len(before_elements)}, 后: {len(after_elements)})")
+                result["new_elements_count"] = new_elements_count
+                
+                # 如果元素数量没有明显增加，可能不是成功展开评论
+                if new_elements_count <= 0:
+                    logger.warning("点击后元素数量没有增加，可能未成功展开评论")
+                    # 尝试查找可能的评论内容，即使元素数量没有增加
+                
+                # 获取页面上所有可能的评论内容
+                possible_comments = self.page.evaluate("""
+                    () => {
+                        const results = [];
+                        // 尝试各种可能的评论内容选择器
+                        const commentSelectors = [
+                            '.comment-item', '.comment-text', '.comment-content',
+                            '.evaluate-content', '.comment-body', '[class*="comment-"]',
+                            // 更通用的文本选择器 - 针对评论的特征
+                            'div', 'p', 'span'
+                        ];
+                        
+                        // 可能的评论容器
+                        const containerSelectors = [
+                            '.comment-list', '.comments-container', '.evaluate-list',
+                            '[class*="comment"]', '[class*="evaluate"]'
+                        ];
+                        
+                        // 先尝试从评论容器中查找
+                        for (const containerSelector of containerSelectors) {
+                            const containers = document.querySelectorAll(containerSelector);
+                            for (const container of containers) {
+                                // 在容器中查找评论元素
+                                for (const selector of commentSelectors) {
+                                    const elements = container.querySelectorAll(selector);
+                                    for (const el of elements) {
+                                        const text = el.innerText?.trim();
+                                        // 评论特征：不太短不太长，不含特定词汇
+                                        if (text && text.length > 3 && text.length < 1000 && 
+                                            !text.includes('评论') && !text.includes('登录') && 
+                                            !text.includes('注册') && !text.includes('点赞')) {
+                                            
+                                            results.push({
+                                                selector: containerSelector + ' ' + selector,
+                                                text: text,
+                                                className: el.className,
+                                                isNew: !el.hasAttribute('data-seen')
+                                            });
+                                            el.setAttribute('data-seen', 'true');
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // 如果没有找到，直接在页面中查找
+                        if (results.length === 0) {
+                            for (const selector of commentSelectors) {
+                                const elements = document.querySelectorAll(selector);
+                                for (const el of elements) {
+                                    const text = el.innerText?.trim();
+                                    if (text && text.length > 3 && text.length < 1000 && 
+                                        !text.includes('评论') && !text.includes('登录') && 
+                                        !text.includes('注册')) {
+                                        
+                                        // 进一步过滤 - 检查是否像评论
+                                        // 评论通常不会包含很多HTML标签
+                                        const hasLowTagDensity = el.innerHTML.length / text.length < 3;
+                                        
+                                        if (hasLowTagDensity) {
+                                            results.push({
+                                                selector: selector,
+                                                text: text,
+                                                className: el.className,
+                                                isNew: !el.hasAttribute('data-seen')
+                                            });
+                                            el.setAttribute('data-seen', 'true');
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // 如果上面的方法都没找到评论，尝试查找任何可能是评论的文本内容
+                        if (results.length === 0) {
+                            // 避免检查整个文档，只检查在点击后可能出现的部分
+                            const elementsAfterClick = Array.from(document.querySelectorAll('*'))
+                                .filter(el => !el.hasAttribute('data-seen-before-click'));
+                            
+                            for (const el of elementsAfterClick) {
+                                const text = el.innerText?.trim();
+                                // 更宽松的评论识别标准
+                                if (text && text.length > 5 && text.length < 500 && 
+                                    !text.includes('登录') && !text.includes('注册') &&
+                                    !text.includes('评论') && !text.includes('点赞')) {
+                                    
+                                    results.push({
+                                        selector: el.tagName.toLowerCase(),
+                                        text: text,
+                                        className: el.className,
+                                        isNew: true
+                                    });
+                                }
                                 el.setAttribute('data-seen', 'true');
                             }
                         }
+                        
+                        return results;
                     }
-                    return results;
-                }
-            """)
-            
-            # 保存可能的评论内容
-            comments_path = f"{log_prefix}_possible_comments.json"
-            with open(comments_path, "w", encoding="utf-8") as f:
-                json.dump(possible_comments, f, ensure_ascii=False, indent=2)
-            
-            logger.info(f"找到 {len(possible_comments)} 条可能的评论内容")
-            
-            return {
-                "before_screenshot": before_screenshot,
-                "after_screenshot": after_screenshot,
-                "before_html": before_html_path,
-                "after_html": after_html_path,
-                "before_elements": before_elements_path,
-                "after_elements": after_elements_path,
-                "comments": comments_path,
-                "new_elements_count": new_elements_count,
-                "possible_comments_count": len(possible_comments)
-            }
-            
+                """)
+                
+                # 保存可能的评论
+                comments_path = f"{log_prefix}_possible_comments.json"
+                with open(comments_path, "w", encoding="utf-8") as f:
+                    json.dump(possible_comments, f, ensure_ascii=False, indent=2)
+                
+                # 更新结果
+                result["possible_comments_count"] = len(possible_comments)
+                result["comments"] = comments_path
+                
+                logger.info(f"找到 {len(possible_comments)} 条可能的评论")
+                return result
+                
+            except Exception as e:
+                logger.error(f"处理点击交互时出错: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return None
+                
         except Exception as e:
-            logger.error(f"分析评论交互失败: {e}")
+            logger.error(f"分析评论元素交互时出错: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return None
