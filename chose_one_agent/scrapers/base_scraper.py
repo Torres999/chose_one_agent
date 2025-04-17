@@ -545,10 +545,11 @@ class BaseScraper:
             sections = ["看盘", "公司"]
         
         # 启动浏览器
-        if not self._ensure_browser_ready():
-            if not self.start_browser():
-                logger.error("启动浏览器失败，无法继续")
-                return []
+        try:
+            self.start_browser()
+        except Exception as e:
+            logger.error("启动浏览器失败，无法继续")
+            return []
             
         # 导航到Telegraph页面
         if not self._navigate_to_telegraph():
@@ -576,6 +577,9 @@ class BaseScraper:
         except Exception as e:
             log_error(logger, "运行电报爬虫时出错", e, self.debug)
             return []
+        finally:
+            # 确保关闭浏览器
+            self.close_browser()
     
     def run(self) -> List[Dict[str, Any]]:
         """

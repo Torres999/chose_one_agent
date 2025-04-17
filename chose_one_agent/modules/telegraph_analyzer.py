@@ -7,7 +7,20 @@ import traceback
 from typing import List, Dict, Any, Tuple
 from collections import Counter
 
-from chose_one_agent.analyzers.text_analyzer import TextAnalyzer
+try:
+    from snownlp import SnowNLP
+    SNOWNLP_AVAILABLE = True
+except ImportError:
+    SNOWNLP_AVAILABLE = False
+
+try:
+    import nltk
+    NLTK_AVAILABLE = True
+except ImportError:
+    NLTK_AVAILABLE = False
+
+# 从constants模块导入常量
+from chose_one_agent.utils.constants import SENTIMENT_LABELS, FINANCIAL_TERMS
 
 logger = logging.getLogger(__name__)
 
@@ -23,93 +36,346 @@ class TelegraphAnalyzer:
             debug: 是否开启调试模式
         """
         self.debug = debug
+        self.sentiment_analyzer_type = sentiment_analyzer_type
+        self.deepseek_api_key = deepseek_api_key
+        self.min_keyword_length = 2
+        self.max_keywords = 10
         
-        # 使用统一的TextAnalyzer替代单独的情感和关键词分析器
-        self.analyzer = TextAnalyzer(
-            sentiment_analyzer_type=sentiment_analyzer_type,
-            deepseek_api_key=deepseek_api_key,
-            debug=debug
-        )
+        # 初始化情感分析器
+        self._init_sentiment_analyzer()
+        
+        # 初始化停用词
+        self.stopwords = self._init_stopwords()
+    
+    def _init_sentiment_analyzer(self):
+        """初始化情感分析器"""
+        if self.sentiment_analyzer_type == "deepseek" and self.deepseek_api_key:
+            try:
+                from chose_one_agent.analyzers.deepseek_sentiment_analyzer import DeepSeekSentimentAnalyzer
+                self.sentiment_analyzer = DeepSeekSentimentAnalyzer(self.deepseek_api_key)
+            except ImportError:
+                logger.warning("DeepSeek分析器不可用，使用SnowNLP")
+                self.sentiment_analyzer_type = "snownlp"
+                self._init_sentiment_analyzer()
+        elif self.sentiment_analyzer_type == "snownlp" and SNOWNLP_AVAILABLE:
+            self.sentiment_analyzer = SnowNLP
+        else:
+            self.sentiment_analyzer_type = "simple"
+            logger.warning("使用简单情感分析器")
+    
+    def _init_stopwords(self):
+        """初始化停用词"""
+        stopwords = set()
+        if NLTK_AVAILABLE:
+            try:
+                nltk.data.find('corpora/stopwords')
+            except LookupError:
+                nltk.download('stopwords')
+            from nltk.corpus import stopwords as nltk_stopwords
+            stopwords.update(nltk_stopwords.words('chinese'))
+        return stopwords
     
     def analyze_sentiment(self, text: str) -> Dict[str, float]:
-        """分析文本情感，返回情感得分"""
-        return self.analyzer.analyze_sentiment(text)
-    
+        """分析文本情感
+        
+        Args:
+            text: 待分析文本
+            
+        Returns:
+            Dict[str, float]: 情感分析结果
+        """
+        if not text or text.strip() == "":
+            return {"pos": 0.0, "neg": 0.0, "neu": 1.0, "compound": 0.0}
+        
+        try:
+            if self.sentiment_analyzer_type == "deepseek":
+                return self.sentiment_analyzer.analyze(text)
+            elif self.sentiment_analyzer_type == "snownlp":
+                s = self.sentiment_analyzer(text)
+                return {
+                    "pos": s.sentiments,
+                    "neg": 1 - s.sentiments,
+                    "neu": 0.0,
+                    "compound": (s.sentiments - 0.5) * 2
+                }
+            else:
+                # 简单情感分析
+                positive_words = {"好", "涨", "升", "强", "优", "良", "佳"}
+                negative_words = {"差", "跌", "降", "弱", "劣", "差", "坏"}
+                
+                words = set(text.split())
+                pos_count = len(words & positive_words)
+                neg_count = len(words & negative_words)
+                total = pos_count + neg_count
+                
+                if total == 0:
+                    return {"pos": 0.0, "neg": 0.0, "neu": 1.0, "compound": 0.0}
+                
+                pos_score = pos_count / total
+                neg_score = neg_count / total
+                return {
+                    "pos": pos_score,
+                    "neg": neg_score,
+                    "neu": 1 - (pos_score + neg_score),
+                    "compound": pos_score - neg_score
+                }
+        except Exception as e:
+            logger.error(f"情感分析出错: {e}")
+            if self.debug:
+                logger.error(traceback.format_exc())
+            return {"pos": 0.0, "neg": 0.0, "neu": 1.0, "compound": 0.0}
+
     def extract_keywords(self, text: str, top_n: int = 5) -> List[str]:
-        """提取文本关键词"""
+        """提取文本关键词
+        
+        Args:
+            text: 待分析文本
+            top_n: 返回关键词数量
+            
+        Returns:
+            List[str]: 关键词列表
+        """
         if not text or text.strip() == "":
             return []
         
         try:
-            return self.analyzer.extract_keywords(text, top_n=top_n)
+            # 分词
+            words = self._tokenize(text)
+            
+            # 过滤停用词和短词
+            words = [word for word in words 
+                    if len(word) >= self.min_keyword_length 
+                    and word not in self.stopwords]
+            
+            # 统计词频
+            word_freq = Counter(words)
+            
+            # 返回频率最高的词
+            return [word for word, _ in word_freq.most_common(top_n)]
         except Exception as e:
-            logger.error("提取关键词时出错: {}".format(e))
+            logger.error(f"提取关键词出错: {e}")
             if self.debug:
                 logger.error(traceback.format_exc())
             return []
     
-    def analyze_post(self, post) -> Any:
-        """分析帖子及其评论，更新情感分析和关键词"""
-        # 分析帖子标题和内容
-        title_sentiment = self.analyze_sentiment(post.title)
-        content_sentiment = self.analyze_sentiment(post.content or post.title)
+    def _tokenize(self, text: str) -> List[str]:
+        """分词
         
-        # 提取关键词
-        content_keywords = self.extract_keywords(post.content or post.title)
+        Args:
+            text: 待分词文本
+            
+        Returns:
+            List[str]: 分词结果
+        """
+        if NLTK_AVAILABLE:
+            try:
+                from nltk.tokenize import word_tokenize
+                return word_tokenize(text)
+            except (ImportError, LookupError):
+                pass
+        return text.split()
+    
+    def get_sentiment_label(self, compound_score: float) -> str:
+        """获取情感标签
         
-        # 获取财经术语
-        keyword_analysis = self.analyzer.analyze_text(post.content or post.title)
-        financial_terms = keyword_analysis.get("financial_terms", [])
+        Args:
+            compound_score: 情感得分
+            
+        Returns:
+            str: 情感标签
+        """
+        for label, (min_score, max_score) in SENTIMENT_LABELS.items():
+            if min_score <= compound_score <= max_score:
+                return label
+        return "未知"
+    
+    def extract_financial_terms(self, text: str) -> List[str]:
+        """提取财经术语
         
-        # 更新帖子情感分析
-        post.sentiment_analysis = {
-            "title": title_sentiment,
-            "content": content_sentiment,
-            "overall": self.analyzer._combine_sentiment_scores([title_sentiment, content_sentiment]),
-            "financial_terms": financial_terms,
-            "has_financial_content": bool(financial_terms)
+        Args:
+            text: 待分析文本
+            
+        Returns:
+            List[str]: 财经术语列表
+        """
+        if not text or text.strip() == "":
+            return []
+        
+        found_terms = []
+        for term in FINANCIAL_TERMS:
+            if term in text:
+                found_terms.append(term)
+        return found_terms
+    
+    def calculate_financial_relevance(self, text: str) -> float:
+        """计算财经相关度
+        
+        Args:
+            text: 待分析文本
+            
+        Returns:
+            float: 财经相关度，0-1之间
+        """
+        if not text or text.strip() == "":
+            return 0.0
+        
+        terms = self.extract_financial_terms(text)
+        if not terms:
+            return 0.0
+        
+        # 简单计算：出现的财经术语数量除以固定值
+        relevance = min(1.0, len(terms) / 5.0)
+        return relevance
+    
+    def analyze_text(self, text: str) -> Dict[str, Any]:
+        """分析文本内容
+        
+        Args:
+            text: 待分析文本
+            
+        Returns:
+            Dict[str, Any]: 分析结果
+        """
+        if not text or text.strip() == "":
+            return {
+                "sentiment": {"pos": 0.0, "neg": 0.0, "neu": 1.0, "compound": 0.0},
+                "sentiment_label": "中性",
+                "keywords": [],
+                "financial_terms": [],
+                "financial_relevance": 0.0,
+                "has_financial_content": False
+            }
+        
+        try:
+            # 情感分析
+            sentiment = self.analyze_sentiment(text)
+            sentiment_label = self.get_sentiment_label(sentiment.get("compound", 0))
+            
+            # 关键词分析
+            keywords = self.extract_keywords(text, top_n=self.max_keywords)
+            
+            # 财经相关性分析
+            financial_terms = self.extract_financial_terms(text)
+            financial_relevance = self.calculate_financial_relevance(text)
+            
+            return {
+                "sentiment": sentiment,
+                "sentiment_label": sentiment_label,
+                "keywords": keywords,
+                "financial_terms": financial_terms,
+                "financial_relevance": financial_relevance,
+                "has_financial_content": bool(financial_terms)
+            }
+        except Exception as e:
+            logger.error(f"分析文本出错: {e}")
+            if self.debug:
+                logger.error(traceback.format_exc())
+            return {
+                "sentiment": {"pos": 0.0, "neg": 0.0, "neu": 1.0, "compound": 0.0},
+                "sentiment_label": "中性",
+                "keywords": [],
+                "financial_terms": [],
+                "financial_relevance": 0.0,
+                "has_financial_content": False,
+                "error": str(e)
+            }
+    
+    def _combine_sentiment_scores(self, scores: List[Dict[str, float]]) -> Dict[str, float]:
+        """合并多个情感得分
+        
+        Args:
+            scores: 情感得分列表
+            
+        Returns:
+            Dict[str, float]: 合并后的情感得分
+        """
+        if not scores:
+            return {"pos": 0.0, "neg": 0.0, "neu": 1.0, "compound": 0.0}
+        
+        # 简单平均
+        pos_avg = sum(s.get("pos", 0) for s in scores) / len(scores)
+        neg_avg = sum(s.get("neg", 0) for s in scores) / len(scores)
+        neu_avg = sum(s.get("neu", 0) for s in scores) / len(scores)
+        compound_avg = sum(s.get("compound", 0) for s in scores) / len(scores)
+        
+        return {
+            "pos": pos_avg,
+            "neg": neg_avg,
+            "neu": neu_avg,
+            "compound": compound_avg
         }
-        
-        # 分析评论
-        if hasattr(post, 'comments') and post.comments:
-            for comment in post.comments:
-                sentiment = self.analyze_sentiment(comment.content)
-                comment.sentiment_score = sentiment.get("compound", 0.0)
-                comment.keywords = self.extract_keywords(comment.content, top_n=3)
-            
-            # 添加评论情感摘要
-            comment_sentiments = [self.analyze_sentiment(c.content) for c in post.comments]
-            post.sentiment_analysis["comments"] = self.analyzer._combine_sentiment_scores(comment_sentiments)
-            
-            # 添加整体评分
-            all_sentiments = [title_sentiment, content_sentiment] + comment_sentiments
-            post.sentiment_analysis["overall"] = self.analyzer._combine_sentiment_scores(all_sentiments)
-        
-        return post
     
-    def analyze_post_batch(self, posts: List[Any]) -> List[Any]:
-        """批量分析多个帖子"""
-        return [self.analyze_post(post) for post in posts]
-    
-    def get_trending_keywords(self, posts: List[Any], limit: int = 10) -> List[Tuple[str, int]]:
-        """获取热门关键词及其频率"""
-        keywords_counter = Counter()
+    def get_detailed_analysis(self, comments: List[str]) -> Dict[str, Any]:
+        """获取详细分析
         
-        # 收集所有关键词
-        for post in posts:
-            # 帖子内容关键词
-            post_keywords = self.extract_keywords(post.content or post.title)
-            keywords_counter.update(post_keywords)
+        Args:
+            comments: 评论列表
             
-            # 评论关键词
-            if hasattr(post, 'comments'):
-                for comment in post.comments:
-                    if hasattr(comment, 'keywords') and comment.keywords:
-                        keywords_counter.update(comment.keywords)
+        Returns:
+            Dict[str, Any]: 详细分析结果
+        """
+        if not comments:
+            return {}
         
-        # 返回出现频率最高的关键词
-        return keywords_counter.most_common(limit)
-
+        try:
+            if self.sentiment_analyzer_type == "deepseek" and hasattr(self.sentiment_analyzer, "analyze_batch"):
+                return self.sentiment_analyzer.analyze_batch(comments[:10])
+            return {}
+        except Exception as e:
+            logger.error(f"获取详细分析出错: {e}")
+            if self.debug:
+                logger.error(traceback.format_exc())
+            return {}
+    
+    def generate_insight(self, analysis_result: Dict[str, Any]) -> str:
+        """生成洞察
+        
+        Args:
+            analysis_result: 分析结果
+            
+        Returns:
+            str: 洞察内容
+        """
+        if not analysis_result:
+            return "暂无洞察"
+            
+        try:
+            title = analysis_result.get("title", "未知标题")
+            sentiment_label = analysis_result.get("sentiment_label", "中性")
+            keywords = analysis_result.get("keywords", [])
+            financial_terms = analysis_result.get("financial_terms", [])
+            has_financial = analysis_result.get("has_financial_content", False)
+            
+            # 生成基本洞察
+            insights = []
+            
+            # 主题
+            if keywords:
+                topics = "、".join(keywords[:3])
+                insights.append(f"主要讨论{topics}等话题")
+                
+            # 情感倾向
+            if sentiment_label in ["积极", "极度积极"]:
+                sentiment_text = "积极乐观"
+            elif sentiment_label in ["消极", "极度消极"]:
+                sentiment_text = "消极悲观"
+            else:
+                sentiment_text = "情绪中性"
+                
+            insights.append(f"整体情绪{sentiment_text}")
+            
+            # 财经相关度
+            if has_financial:
+                terms = "、".join(financial_terms[:3])
+                insights.append(f"涉及{terms}等财经概念")
+            
+            return "。".join(insights) + "。"
+        except Exception as e:
+            logger.error(f"生成洞察出错: {e}")
+            if self.debug:
+                logger.error(traceback.format_exc())
+            return "无法生成洞察"
+    
     def analyze_post_data(self, post_data: Dict[str, Any], comments: List[str] = None) -> Dict[str, Any]:
         """分析帖子数据
         
@@ -144,61 +410,31 @@ class TelegraphAnalyzer:
             combined_comments = " ".join(comments)
             sentiment_score = self.analyze_sentiment(combined_comments)
             result["sentiment_score"] = sentiment_score
-            result["sentiment_label"] = self.analyzer.get_sentiment_label(sentiment_score.get("compound", 0))
+            result["sentiment_label"] = self.get_sentiment_label(sentiment_score.get("compound", 0))
             
             # 关键词分析
-            keyword_results = self.analyzer.analyze_text(combined_comments)
-            result["keywords"] = keyword_results.get("keywords", [])
-            result["financial_terms"] = keyword_results.get("financial_terms", [])
-            result["has_financial_content"] = keyword_results.get("has_financial_content", False)
-            result["financial_relevance"] = keyword_results.get("financial_relevance", 0.0)
+            analysis = self.analyze_text(combined_comments)
+            result["keywords"] = analysis.get("keywords", [])
+            result["financial_terms"] = analysis.get("financial_terms", [])
+            result["has_financial_content"] = analysis.get("has_financial_content", False)
+            result["financial_relevance"] = analysis.get("financial_relevance", 0.0)
             
             # 详细情感分析(DeepSeek)
-            if self.analyzer.sentiment_analyzer_type == "deepseek" and self.analyzer.deepseek_api_key:
+            if self.sentiment_analyzer_type == "deepseek" and self.deepseek_api_key:
                 try:
-                    details = self.analyzer.get_detailed_analysis(comments[:10])
+                    details = self.get_detailed_analysis(comments[:10])
                     result["detailed_analysis"] = details
                 except Exception as e:
-                    logger.error("获取详细分析时出错: {}".format(e))
+                    logger.error(f"获取详细分析时出错: {e}")
                     if self.debug:
                         logger.error(traceback.format_exc())
             
             # 生成洞察
-            result["insight"] = self.analyzer.generate_insight(result)
+            result["insight"] = self.generate_insight(result)
             
             return result
         except Exception as e:
-            logger.error("分析帖子 '{}' 时出错: {}".format(title, e))
+            logger.error(f"分析帖子 '{title}' 时出错: {e}")
             if self.debug:
                 logger.error(traceback.format_exc())
-            return dict(result, error=str(e))
-
-    def get_sentiment_label(self, compound_score: float) -> str:
-        """获取情感标签"""
-        return self.analyzer.get_sentiment_label(compound_score)
-
-    def get_detailed_analysis(self, comments: List[str]) -> Dict[str, Any]:
-        """获取详细情感分析（DeepSeek专用）"""
-        return self.analyzer.get_detailed_analysis(comments)
-
-    def generate_insight(self, analysis_result: Dict[str, Any]) -> str:
-        """生成分析洞察"""
-        return self.analyzer.generate_insight(analysis_result)
-
-    def _clean_text(self, text: str) -> str:
-        """清理文本"""
-        if not text:
-            return ""
-        # 移除HTML标签
-        text = re.sub(r'<[^>]+>', '', text)
-        # 移除多余空白
-        text = re.sub(r'\s+', ' ', text).strip()
-        return text
-
-    def _extract_financial_terms(self, text: str) -> List[str]:
-        """提取财经术语"""
-        return self.analyzer.extract_financial_terms(text)
-
-    def _calculate_financial_relevance(self, text: str) -> float:
-        """计算文本与财经相关度"""
-        return self.analyzer.calculate_financial_relevance(text) 
+            return dict(result, error=str(e)) 
