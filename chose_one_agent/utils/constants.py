@@ -5,9 +5,9 @@ from typing import Dict, Any, List, Tuple
 
 # 网站与API相关常量
 BASE_URLS = {
-    "main": "https://www.cls.cn",
-    "telegraph": "https://www.cls.cn/telegraph",
-    "watch_plate": "https://www.cls.cn/watch_plate"
+    "main": "https://www.x.cn",
+    "telegraph": "https://www.x.cn/telegraph",
+    "watch_plate": "https://www.x.cn/watch_plate"
 }
 
 # 默认截止时间(天)
