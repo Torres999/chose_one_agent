@@ -89,23 +89,29 @@ class BaseScraper:
         if not self.page:
             return
             
-        # 从原 scraper.py 导入需要的组件
+        # 导入需要的组件
         try:
             from chose_one_agent.modules.comment_extractor import CommentExtractor
             from chose_one_agent.analyzers.sentiment_analyzer import SentimentAnalyzer
             from chose_one_agent.analyzers.keyword_analyzer import KeywordAnalyzer
-            from chose_one_agent.analyzers.text_analyzer import TelegraphAnalyzer
+            from chose_one_agent.modules.telegraph_analyzer import TelegraphAnalyzer
             
-            self._comment_extractor = CommentExtractor(self.page, self.debug)
-            self._sentiment_analyzer = SentimentAnalyzer(
-                self.sentiment_analyzer_type, self.deepseek_api_key
-            )
-            self._keyword_analyzer = KeywordAnalyzer()
+            # 创建分析器实例
             self._post_analyzer = TelegraphAnalyzer(
                 sentiment_analyzer_type=self.sentiment_analyzer_type,
                 deepseek_api_key=self.deepseek_api_key,
                 debug=self.debug
             )
+            
+            # 创建评论提取器实例并注入分析器
+            self._comment_extractor = CommentExtractor(self.page, self.debug, self._post_analyzer)
+            
+            # 保留这些实例以便向后兼容
+            self._sentiment_analyzer = SentimentAnalyzer(
+                self.sentiment_analyzer_type, self.deepseek_api_key
+            )
+            self._keyword_analyzer = KeywordAnalyzer()
+            
         except ImportError as e:
             # 这些组件可能不是所有爬虫都需要的，记录日志但不终止程序
             logger.warning(f"初始化高级组件时出错: {e}")
@@ -431,9 +437,20 @@ class BaseScraper:
         """分析帖子及其评论"""
         if not self._post_analyzer:
             logger.error("未设置分析工具，无法分析")
-            return {}
+            return post_data
             
-        return self._post_analyzer.analyze_post_data(post_data, post_data.get("comments", []))
+        # 使用注入的分析器实例
+        try:
+            analysis_results = self._post_analyzer.analyze_post_data(
+                post_data, 
+                post_data.get("comments", [])
+            )
+            # 将分析结果合并到原始数据中
+            post_data.update(analysis_results)
+            return post_data
+        except Exception as e:
+            log_error(logger, "分析帖子时出错", e, self.debug)
+            return post_data
     
     def wait_for_network_idle(self, timeout: int = 5000):
         """等待网络请求完成"""

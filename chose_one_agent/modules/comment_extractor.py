@@ -16,7 +16,7 @@ from bs4 import BeautifulSoup
 from chose_one_agent.analyzers.sentiment_analyzer import SentimentAnalyzer
 from chose_one_agent.utils.logging_utils import get_logger, log_error
 from chose_one_agent.utils.config import BASE_URL
-from chose_one_agent.analyzers.text_analyzer import TelegraphAnalyzer
+from chose_one_agent.modules.telegraph_analyzer import TelegraphAnalyzer
 
 # 获取日志记录器
 logger = get_logger(__name__)
@@ -38,16 +38,18 @@ NUMBER_REGEX = re.compile(r'(\d+)')
 class CommentExtractor:
     """电报评论提取工具，负责从帖子中获取评论并进行分析"""
     
-    def __init__(self, page: Optional[Page] = None, debug: bool = False):
+    def __init__(self, page: Optional[Page] = None, debug: bool = False, analyzer: Optional[TelegraphAnalyzer] = None):
         """
         初始化评论提取工具
         
         Args:
             page: Playwright页面对象
             debug: 是否启用调试模式
+            analyzer: 分析器实例（可选，使用依赖注入模式）
         """
         self.page = page
         self.debug = debug
+        self.analyzer = analyzer
     
     def set_page(self, page: Page):
         """
@@ -57,6 +59,15 @@ class CommentExtractor:
             page: Playwright页面对象
         """
         self.page = page
+    
+    def set_analyzer(self, analyzer: TelegraphAnalyzer):
+        """
+        设置分析器
+        
+        Args:
+            analyzer: 分析器实例
+        """
+        self.analyzer = analyzer
     
     def extract_comments(self, post_url: str, max_comments: int = 50) -> List[str]:
         """
@@ -289,14 +300,11 @@ class CommentExtractor:
         """
         return [comment.get("content", "") for comment in comments if comment.get("content")]
             
-    def analyze_sentiment(self, 
-                         comments: List[Dict[str, Any]], 
-                         analyzer: TelegraphAnalyzer) -> Dict[str, Any]:
+    def analyze_sentiment(self, comments: List[Dict[str, Any]]) -> Dict[str, Any]:
         """分析评论情感
         
         Args:
             comments: 评论信息列表
-            analyzer: 情感分析器
             
         Returns:
             情感分析结果
@@ -304,11 +312,16 @@ class CommentExtractor:
         if not comments:
             return {"success": False, "message": "无评论"}
             
+        # 确保有分析器
+        if not self.analyzer:
+            logger.error("未设置分析器，无法进行情感分析")
+            return {"success": False, "message": "未设置分析器"}
+            
         # 提取评论文本
         comment_texts = self.get_comments_text(comments)
         
         # 使用分析器进行分析
-        return analyzer.analyze_sentiment(comment_texts)
+        return self.analyzer.analyze_sentiment(" ".join(comment_texts))
     
     def extract_info_from_html(self, html_content: str) -> List[Dict[str, Any]]:
         """从HTML内容中提取评论信息
