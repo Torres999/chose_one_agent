@@ -445,6 +445,8 @@ class BaseNavigator:
                      processed_ids: set, results: list, section: str, max_posts: int) -> List[Dict[str, Any]]:
         """爬取帖子"""
         try:
+            import datetime
+            
             # 记录截止日期时间
             if cutoff_datetime:
                 logger.info(f"使用截止日期时间: {cutoff_datetime}")
@@ -468,6 +470,7 @@ class BaseNavigator:
             
             # 在容器中查找内容盒子
             all_processed_posts = []
+            early_post_found = False  # 新增: 早期帖子标志，用于提前终止处理
             
             for i, container in enumerate(containers):
                 if len(results) >= max_posts:
@@ -516,7 +519,11 @@ class BaseNavigator:
                                 processed_ids.add(post_id)
                                 all_processed_posts.append(post_info)
                             else:
-                                logger.info(f"帖子时间 {post_datetime} 不晚于截止时间 {cutoff_datetime}，跳过")
+                                # 发现早于截止时间的帖子，设置标志并终止处理
+                                logger.info(f"发现帖子 '{post_info.get('title', '未知标题')[:30]}...' 时间 {post_datetime} 早于截止时间 {cutoff_datetime}")
+                                logger.info(f"由于帖子按时间排序，终止当前模块的所有后续处理")
+                                early_post_found = True
+                                break  # 跳出内容盒子循环
                         except ValueError as e:
                             logger.warning(f"解析帖子时间出错: {post_date} {post_time}, {e}")
                     else:
@@ -527,6 +534,16 @@ class BaseNavigator:
                     
                     if len(results) >= max_posts:
                         break
+                
+                # 如果已发现早于截止时间的帖子，终止容器处理
+                if early_post_found:
+                    logger.info(f"发现早于截止时间的帖子，跳过后续容器处理")
+                    break
+            
+            # 如果已发现早于截止时间的帖子，不再加载更多内容
+            if early_post_found:
+                logger.info(f"已找到早于截止时间的帖子，不再加载更多内容，返回已收集的结果")
+                return all_processed_posts
                 
             # 尝试加载更多帖子，直到达到目标数量
             attempts = 0
@@ -594,7 +611,11 @@ class BaseNavigator:
                                     processed_ids.add(post_id)
                                     all_processed_posts.append(post_info)
                                 else:
-                                    logger.info(f"帖子时间 {post_datetime} 不晚于截止时间 {cutoff_datetime}，跳过")
+                                    # 发现早于截止时间的帖子，设置标志并终止处理
+                                    logger.info(f"发现帖子 '{post_info.get('title', '未知标题')[:30]}...' 时间 {post_datetime} 早于截止时间 {cutoff_datetime}")
+                                    logger.info(f"由于帖子按时间排序，终止当前模块的所有后续处理")
+                                    early_post_found = True
+                                    break  # 跳出内容盒子循环
                             except ValueError as e:
                                 logger.warning(f"解析帖子时间出错: {post_date} {post_time}, {e}")
                         else:
@@ -605,6 +626,16 @@ class BaseNavigator:
                         
                         if len(results) >= max_posts:
                             break
+                    
+                    # 如果已发现早于截止时间的帖子，终止容器处理
+                    if early_post_found:
+                        logger.info(f"发现早于截止时间的帖子，跳过后续容器处理")
+                        break
+                
+                # 如果已发现早于截止时间的帖子，不再继续加载更多内容
+                if early_post_found:
+                    logger.info(f"已找到早于截止时间的帖子，不再加载更多内容")
+                    break
                 
                 # 更新容器列表
                 containers = new_containers
