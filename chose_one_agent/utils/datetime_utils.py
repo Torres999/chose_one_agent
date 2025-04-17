@@ -127,21 +127,31 @@ def parse_cutoff_date(cutoff_date_str: Optional[str] = None) -> datetime.datetim
     解析截止日期字符串
     
     Args:
-        cutoff_date_str: 截止日期时间字符串，格式为'YYYY-MM-DD HH:MM'
+        cutoff_date_str: 截止日期时间字符串，格式为'YYYY-MM-DD HH:MM'或'YYYY-MM-DD HH:MM:SS'
         
     Returns:
         datetime对象
+        
+    Raises:
+        ValueError: 如果截止日期格式无效或解析失败
     """
     if not cutoff_date_str:
-        # 默认为当前时间前N天
-        return datetime.datetime.now() - datetime.timedelta(days=DEFAULT_CUTOFF_DAYS)
+        raise ValueError("必须提供截止日期参数")
     
-    try:
-        return datetime.datetime.strptime(cutoff_date_str, DATETIME_FORMATS["standard"])
-    except ValueError as e:
-        logger.error(f"无效的截止日期格式: {cutoff_date_str}，应为'YYYY-MM-DD HH:MM': {e}")
-        # 默认为当前时间前N天
-        return datetime.datetime.now() - datetime.timedelta(days=DEFAULT_CUTOFF_DAYS)
+    # 尝试多种格式解析
+    formats = [
+        DATETIME_FORMATS["standard"],                # YYYY-MM-DD HH:MM
+        DATETIME_FORMATS.get("standard_with_seconds", "%Y-%m-%d %H:%M:%S")  # YYYY-MM-DD HH:MM:SS
+    ]
+    
+    for fmt in formats:
+        try:
+            return datetime.datetime.strptime(cutoff_date_str, fmt)
+        except ValueError:
+            continue
+    
+    # 如果所有格式都失败，抛出异常
+    raise ValueError(f"无效的截止日期格式: {cutoff_date_str}，应为'YYYY-MM-DD HH:MM'或'YYYY-MM-DD HH:MM:SS'")
 
 def is_before_cutoff(post_date: datetime.datetime, cutoff_date: datetime.datetime) -> bool:
     """

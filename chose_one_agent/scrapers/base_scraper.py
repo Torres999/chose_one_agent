@@ -11,7 +11,7 @@ from urllib.parse import urljoin
 from playwright.sync_api import sync_playwright, Page, Browser, Response
 
 from chose_one_agent.utils.config import BASE_URL
-from chose_one_agent.utils.constants import SCRAPER_CONSTANTS
+from chose_one_agent.utils.constants import SCRAPER_CONSTANTS, BASE_URLS
 from chose_one_agent.utils.logging_utils import get_logger, log_error
 from chose_one_agent.utils.datetime_utils import is_before_cutoff, parse_datetime
 from chose_one_agent.scrapers.base_navigator import BaseNavigator
@@ -93,7 +93,6 @@ class BaseScraper:
         try:
             from chose_one_agent.modules.comment_extractor import CommentExtractor
             from chose_one_agent.analyzers.sentiment_analyzer import SentimentAnalyzer
-            from chose_one_agent.analyzers.keyword_analyzer import KeywordAnalyzer
             from chose_one_agent.modules.telegraph_analyzer import TelegraphAnalyzer
             
             # 创建分析器实例
@@ -110,11 +109,22 @@ class BaseScraper:
             self._sentiment_analyzer = SentimentAnalyzer(
                 self.sentiment_analyzer_type, self.deepseek_api_key
             )
-            self._keyword_analyzer = KeywordAnalyzer()
+            
+            # 尝试导入KeywordAnalyzer，但如果不存在不会影响主要功能
+            try:
+                from chose_one_agent.analyzers.keyword_analyzer import KeywordAnalyzer
+                self._keyword_analyzer = KeywordAnalyzer()
+            except ImportError:
+                logger.warning("KeywordAnalyzer模块不存在，将不使用关键词分析功能")
+                self._keyword_analyzer = None
             
         except ImportError as e:
             # 这些组件可能不是所有爬虫都需要的，记录日志但不终止程序
             logger.warning(f"初始化高级组件时出错: {e}")
+            self._post_analyzer = None
+            self._comment_extractor = None
+            self._sentiment_analyzer = None
+            self._keyword_analyzer = None
     
     def close_browser(self):
         """关闭浏览器及相关资源"""
@@ -303,64 +313,67 @@ class BaseScraper:
     
     def extract_post_info(self, post_element) -> Dict[str, Any]:
         """从帖子元素中提取信息"""
-        # 需要导入选择器
+        # 导入选择器
         try:
             from chose_one_agent.modules.sections_config import get_selector
             
-            SELECTORS = {
-                "post_items": get_selector("post_items"),
-                "post_title": get_selector("post_title"),
-                "post_date": get_selector("post_date"),
-                "post_content": get_selector("post_content"),
-                "load_more": get_selector("load_more"),
-                "comments": get_selector("comments")
-            }
+            title_selector = get_selector("post_title")
+            date_selector = get_selector("post_date")
+            
+            logger.info(f"使用标题选择器: '{title_selector}', 时间选择器: '{date_selector}'")
         except ImportError:
             logger.warning("无法导入 sections_config，将使用基本提取方法")
-            SELECTORS = {
-                "post_title": "h2, .title, .post-title",
-                "post_date": ".date, .time, .timestamp",
-                "post_content": ".content, .post-content",
-                "comments": ".comment, .comments"
-            }
+            title_selector = "strong"
+            date_selector = ".f-l.l-h-13636.f-w-b.c-de0422.telegraph-time-box, .telegraph-time-box"
         
         result = {
-            "element": post_element,
             "title": "未知标题",
             "date": datetime.datetime.now().strftime("%Y.%m.%d"),
-            "time": datetime.datetime.now().strftime("%H:%M"),
-            "comment_count": 0
+            "time": datetime.datetime.now().strftime("%H:%M")
         }
         
         try:
-            # 提取标题
-            title_el = post_element.query_selector(SELECTORS["post_title"])
-            if title_el:
-                result["title"] = title_el.inner_text().strip()
+            # 只在调试模式下输出元素HTML
+            if self.debug:
+                logger.debug("处理帖子元素")
             
-            # 提取日期/时间
-            date_el = post_element.query_selector(SELECTORS["post_date"])
+            # 提取标题 - 在财联社电报中，标题通常位于<strong>标签中
+            title_el = post_element.query_selector(title_selector)
+            if title_el:
+                title_text = title_el.inner_text().strip()
+                # 只输出标题的前30个字符，避免日志过长
+                truncated_title = (title_text[:27] + "...") if len(title_text) > 30 else title_text
+                result["title"] = title_text
+                logger.info(f"提取到标题: {truncated_title}")
+            else:
+                logger.warning(f"未找到标题元素，选择器: '{title_selector}'")
+            
+            # 提取日期/时间 - 在财联社电报中，时间通常位于特定的时间盒子中
+            date_el = post_element.query_selector(date_selector)
             if date_el:
-                date_text = date_el.inner_text().strip()
-                date_match = re.search(r'(\d{4}[-\.]\d{1,2}[-\.]\d{1,2})', date_text)
-                if date_match:
-                    result["date"] = date_match.group(1).replace('-', '.')
-                time_match = re.search(r'(\d{2}:\d{2})', date_text)
+                time_text = date_el.inner_text().strip()
+                logger.info(f"提取到时间文本: {time_text}")
+                
+                # 尝试提取时间 (如 04:00:52)
+                time_match = re.search(r'(\d{2}:\d{2}(?::\d{2})?)', time_text)
                 if time_match:
                     result["time"] = time_match.group(1)
+                    logger.info(f"解析出时间: {result['time']}")
+                else:
+                    logger.warning(f"未能从时间文本中解析出时间: {time_text}")
+                
+                # 尝试从当前日期构建完整日期（因为电报通常只显示时间）
+                today = datetime.datetime.now().strftime("%Y.%m.%d")
+                result["date"] = today
+            else:
+                logger.warning(f"未找到时间元素，选择器: '{date_selector}'")
             
-            # 获取评论
-            comments = self.get_comments(post_element)
-            result["comments"] = comments
-            result["comment_count"] = len(comments)
-            
-            # 标记为有效帖子
+            # 标记为有效帖子 - 只检查标题是否有效，不再考虑内容
             result["is_valid_post"] = bool(result["title"] != "未知标题")
+            
             return result
         except Exception as e:
-            logger.error(f"提取帖子信息时出错: {e}")
-            if self.debug:
-                logger.error(traceback.format_exc())
+            log_error(logger, f"提取帖子信息时出错: {e}", e, self.debug)
             return result
     
     def scrape_section(self, section: str, max_posts: int = 20, cutoff_time: str = None) -> List[Dict[str, Any]]:
@@ -459,15 +472,15 @@ class BaseScraper:
     def _navigate_to_telegraph(self) -> bool:
         """导航到Telegraph主页"""
         try:
-            # 构建Telegraph URL
-            telegraph_url = urljoin(self.base_url, "/telegraph")
+            # 使用常量替换硬编码的财联社电报URL
+            telegraph_url = BASE_URLS["telegraph"]
             
             # 导航到Telegraph主页
-            logger.info(f"正在导航到Telegraph: {telegraph_url}")
+            logger.info(f"正在导航到电报: {telegraph_url}")
             success = self.navigator.navigate_to_url(telegraph_url)
             
             if success:
-                logger.info("成功导航到Telegraph主页")
+                logger.info("成功导航到电报主页")
                 
                 # 等待页面加载完成
                 self.wait_for_network_idle()
@@ -475,21 +488,33 @@ class BaseScraper:
                 # 导入选择器
                 try:
                     from chose_one_agent.modules.sections_config import get_selector
-                    post_selector = get_selector("post_items")
+                    post_container_selector = get_selector("post_items")
                 except ImportError:
-                    logger.warning("无法导入sections_config，使用默认选择器")
-                    post_selector = ".post, article, .article, .item"
+                    logger.warning("无法导入选择器配置，使用默认选择器")
+                    post_container_selector = ".b-c-e6e7ea.telegraph-list"
                 
-                # 尝试定位验证页面是否正确
-                posts = self.page.query_selector_all(post_selector)
-                if posts:
-                    logger.info(f"找到 {len(posts)} 个帖子元素")
+                logger.info(f"使用帖子容器选择器: '{post_container_selector}'")
+                
+                # 检查页面是否有内容元素
+                post_containers = self.page.query_selector_all(post_container_selector)
+                if post_containers:
+                    logger.info(f"找到 {len(post_containers)} 个帖子容器")
+                    
+                    # 输出第一个容器的部分HTML用于调试
+                    if self.debug and post_containers:
+                        first_container_html = post_containers[0].inner_html()
+                        logger.debug(f"第一个帖子容器HTML前150字符: {first_container_html[:150]}...")
                 else:
-                    logger.warning("未找到任何帖子元素，页面可能不是Telegraph主页")
+                    logger.warning(f"未找到任何帖子容器，选择器: '{post_container_selector}'")
+                    
+                    # 在调试模式下，输出部分HTML用于调试
+                    if self.debug:
+                        html = self.page.content()
+                        logger.debug(f"页面HTML前300字符: {html[:300]}...")
                     
             return success
         except Exception as e:
-            log_error(logger, "导航到Telegraph主页时出错", e, self.debug)
+            log_error(logger, "导航到电报主页时出错", e, self.debug)
             return False
     
     def _scrape_section(self, section_name: str) -> List[Dict[str, Any]]:
@@ -505,26 +530,30 @@ class BaseScraper:
         try:
             # 导航到指定板块
             if not self.navigate_to_telegraph_section(section_name):
-                logger.warning(f"导航到 '{section_name}' 板块失败，尝试使用其他方法")
-                
-                # 尝试直接使用URL导航
-                try:
-                    from chose_one_agent.modules.sections_config import SECTION_URLS
-                    if section_name in SECTION_URLS:
-                        section_url = SECTION_URLS[section_name]
-                        if not self.navigator.navigate_to_url(section_url):
-                            logger.error(f"无法导航到 '{section_name}' 板块")
-                            return []
-                except ImportError:
-                    logger.error("无法导入SECTION_URLS，导航失败")
-                    return []
+                logger.error(f"导航到 '{section_name}' 板块失败")
+                return []
             
             # 等待页面加载
             self.wait_for_network_idle()
             
-            # 爬取板块内容
+            # 获取帖子容器选择器
+            try:
+                from chose_one_agent.modules.sections_config import get_selector
+                post_container_selector = get_selector("post_items")
+                logger.info(f"使用帖子容器选择器: '{post_container_selector}'")
+            except ImportError:
+                logger.warning("无法导入选择器配置，使用默认选择器")
+                post_container_selector = ".b-c-e6e7ea.telegraph-list"
+            
+            # 爬取板块内容 - 传递截止日期
             logger.info(f"开始爬取 '{section_name}' 板块内容")
-            return self.scrape_section(section_name, max_posts=30)
+            return self.navigator.scrape_section(
+                section_name,
+                post_container_selector, 
+                self.extract_post_info,
+                30,
+                self.cutoff_date
+            )
             
         except Exception as e:
             log_error(logger, f"爬取 '{section_name}' 板块时出错", e, self.debug)

@@ -181,8 +181,15 @@ def main():
     """
     # 解析命令行参数
     args = parse_args()
-    cutoff_date = parse_cutoff_date(args.cutoff_date)
     
+    try:
+        # 解析截止日期，如果解析失败会抛出异常
+        cutoff_date = parse_cutoff_date(args.cutoff_date)
+    except ValueError as e:
+        logger.error(f"截止日期解析失败: {e}")
+        print(f"\n错误: {e}")
+        sys.exit(1)
+        
     # 如果是调试模式，显示所有参数
     if args.debug:
         logger.debug(f"命令行参数: {args}")

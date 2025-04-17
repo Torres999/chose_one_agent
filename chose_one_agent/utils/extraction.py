@@ -36,12 +36,6 @@ def format_output(title: str, date: str, time: str, sentiment: Optional[Union[st
         comments = sentiment.get("comments", [])
         sentiment_analysis = sentiment.get("sentiment_analysis", "")
         
-        # 如果标题中包含报文，添加报文内容
-        if "content" in sentiment:
-            content = sentiment.get("content", "")
-            if content:
-                output += f"\n报文内容：{content}"
-        
         output += f"\n评论情绪：{sentiment_label}"
         output += f"\n所属板块：{section}"
         

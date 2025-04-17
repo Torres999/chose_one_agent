@@ -7,12 +7,14 @@ import traceback
 import re
 from typing import List, Optional, Dict, Any, Callable
 from urllib.parse import urljoin
+import datetime
 
 from playwright.sync_api import Page, ElementHandle
 
-from chose_one_agent.utils.constants import SCRAPER_CONSTANTS, COMMON_SELECTORS
+from chose_one_agent.utils.constants import SCRAPER_CONSTANTS, COMMON_SELECTORS, BASE_URLS
 from chose_one_agent.utils.logging_utils import get_logger, log_error
 from chose_one_agent.utils.config import BASE_URL
+from chose_one_agent.utils.datetime_utils import is_time_after_cutoff, parse_datetime, parse_cutoff_date
 
 # 获取日志记录器
 logger = get_logger(__name__)
@@ -311,100 +313,57 @@ class BaseNavigator:
         导航到Telegraph的特定版块
         
         Args:
-            section_name: 版块名称，如"看盘"，"公司"等
+            section_name: 版块名称，如"公司"，"看盘"等
             
         Returns:
             导航是否成功
         """
-        # 从 navigation.py 导入
-        from chose_one_agent.modules.sections_config import SECTION_URLS
-        
-        # 首先尝试直接使用URL导航
-        if section_name in SECTION_URLS:
-            url = SECTION_URLS[section_name]
-            if self.navigate_to_url(url):
-                time.sleep(2)  # 等待页面加载
-                # 确认是否导航到正确的版块
-                if self.verify_section_content(section_name):
-                    return True
-                else:
-                    logger.warning(f"无法验证 '{section_name}' 版块内容")
-        
-        # 如果直接导航失败，尝试从主页导航
-        logger.info(f"直接导航失败，尝试从主页导航到 '{section_name}' 版块")
-        
-        # 导航到主站
-        telegraph_url = urljoin(self.base_url, "/telegraph")
+        # 首先确保在Telegraph主页
+        telegraph_url = BASE_URLS["telegraph"]
         if not self.navigate_to_url(telegraph_url):
             logger.error(f"无法导航到Telegraph主页: {telegraph_url}")
             return False
             
-        # 等待加载
-        time.sleep(2)
+        # 等待页面加载
+        time.sleep(SCRAPER_CONSTANTS["page_load_wait"])
             
-        # 尝试点击相应的版块链接
+        # 尝试根据文本内容找到并点击相应的导航项
         try:
-            # 定义可能的选择器
+            logger.info(f"尝试在页面上查找并点击 '{section_name}' 导航项")
+            
+            # 尝试不同的选择器策略来找到导航元素
             selectors = [
-                f"text='{section_name}'", 
+                f"a:text('{section_name}')",
                 f"a:has-text('{section_name}')",
-                f"[class*='tab']:has-text('{section_name}')"
+                f"text='{section_name}'",
+                f".nav a:has-text('{section_name}')",
+                f"li:has-text('{section_name}')"
             ]
             
             # 尝试点击每个可能的选择器
-            if self._try_click_selectors(selectors):
-                time.sleep(2)  # 等待页面加载
-                if self.verify_section_content(section_name):
-                    return True
-                
-            # 尝试使用可能的URL路径
-            if self._try_possible_urls(section_name):
-                return True
-                
-            logger.error(f"无法找到 '{section_name}' 版块")
+            for selector in selectors:
+                try:
+                    logger.info(f"尝试选择器: {selector}")
+                    elements = self.page.query_selector_all(selector)
+                    
+                    for element in elements:
+                        if element and element.is_visible():
+                            element.click()
+                            logger.info(f"已点击 '{section_name}' 导航项")
+                            time.sleep(SCRAPER_CONSTANTS["page_load_wait"])  # 等待导航完成
+                            return True
+                except Exception as e:
+                    if self.debug:
+                        logger.debug(f"使用选择器 {selector} 点击失败: {str(e)}")
+                    continue
+            
+            logger.warning(f"无法在页面上找到 '{section_name}' 导航项")
             return False
             
         except Exception as e:
             log_error(logger, f"导航到 '{section_name}' 版块时出错", e, self.debug)
             return False
     
-    def _try_click_selectors(self, selectors: List[str]) -> bool:
-        """尝试点击多个可能的选择器"""
-        for selector in selectors:
-            try:
-                element = self.page.query_selector(selector)
-                if element and element.is_visible():
-                    element.click()
-                    logger.info(f"已点击元素: {selector}")
-                    time.sleep(2)  # 等待导航完成
-                    return True
-            except Exception as e:
-                if self.debug:
-                    logger.debug(f"点击 {selector} 失败: {e}")
-        return False
-        
-    def _try_possible_urls(self, section_name: str) -> bool:
-        """尝试可能的URL路径"""
-        # 尝试多种URL路径格式
-        url_formats = [
-            "/telegraph/{}",
-            "/telegraph/{}s",
-            "/telegraph/channel/{}",
-            "/telegraph/section/{}"
-        ]
-        
-        for url_format in url_formats:
-            url_path = url_format.format(section_name.lower())
-            full_url = urljoin(self.base_url, url_path)
-            
-            logger.info(f"尝试导航到: {full_url}")
-            if self.navigate_to_url(full_url):
-                time.sleep(2)
-                if self.verify_section_content(section_name):
-                    return True
-                    
-        return False
-        
     def verify_section_content(self, section_name: str) -> bool:
         """
         验证当前页面是否为指定版块内容
@@ -416,30 +375,19 @@ class BaseNavigator:
             是否为指定版块
         """
         try:
-            # 检查URL中是否包含版块名称或相关关键词
-            current_url = self.page.url.lower()
-            section_lower = section_name.lower()
-            
-            # 直接检查URL
-            if section_lower in current_url:
-                logger.info(f"URL包含 '{section_name}', 确认导航成功")
+            # 检查页面内容是否包含板块名称
+            page_content = self.page.content()
+            if section_name in page_content:
+                logger.info(f"页面内容包含 '{section_name}', 确认导航成功")
                 return True
                 
-            # 检查页面标题或面包屑
-            title_element = self.page.query_selector("title, h1, .breadcrumb")
-            if title_element:
-                title_text = title_element.inner_text().lower()
-                if section_lower in title_text:
-                    logger.info(f"页面标题包含 '{section_name}', 确认导航成功")
-                    return True
-            
-            # 检查是否有帖子内容
-            # 从 navigation.py 导入
+            # 检查是否有帖子容器
             from chose_one_agent.modules.sections_config import get_selector
             post_selector = get_selector("post_items")
-            posts = self.page.query_selector_all(post_selector)
-            if posts:
-                logger.info(f"找到 {len(posts)} 个帖子，假定导航成功")
+            logger.info(f"尝试查找帖子容器，使用选择器: '{post_selector}'")
+            post_containers = self.page.query_selector_all(post_selector)
+            if post_containers and len(post_containers) > 0:
+                logger.info(f"找到 {len(post_containers)} 个帖子容器，确认导航成功")
                 return True
                 
             logger.warning(f"无法确认当前页面是 '{section_name}' 版块")
@@ -451,7 +399,7 @@ class BaseNavigator:
             
     def scrape_section(self, section: str, post_container_selector: str, 
                       extract_post_info_func: Callable, max_posts: int = 50,
-                      cutoff_time: Optional[str] = None) -> List[Dict[str, Any]]:
+                      cutoff_datetime: Optional[datetime.datetime] = None) -> List[Dict[str, Any]]:
         """
         从指定版块获取帖子列表
         
@@ -460,7 +408,7 @@ class BaseNavigator:
             post_container_selector: 帖子容器的CSS选择器
             extract_post_info_func: 提取帖子信息的函数
             max_posts: 最大获取帖子数
-            cutoff_time: 截止时间，早于此时间的帖子将被忽略
+            cutoff_datetime: 截止日期时间对象，早于此时间的帖子将被忽略
             
         Returns:
             帖子信息列表
@@ -475,95 +423,223 @@ class BaseNavigator:
         
         logger.info(f"开始从 '{section}' 版块获取帖子")
         
-        # 首次处理当前页面的帖子
-        posts = self._get_and_process_posts(post_container_selector, extract_post_info_func, 
-                                          cutoff_time, processed_ids, results)
+        # 导入选择器
+        try:
+            from chose_one_agent.modules.sections_config import get_selector
+            content_box_selector = get_selector("post_content_box")
+            logger.info(f"使用内容盒子选择器: '{content_box_selector}'")
+        except ImportError:
+            logger.warning("无法导入选择器配置，使用默认内容盒子选择器")
+            content_box_selector = ".clearfix.m-b-15.f-s-16.telegraph-content-box"
         
-        # 加载更多帖子，直到达到目标数量或没有更多帖子
-        while len(results) < max_posts:
-            logger.info(f"已获取 {len(results)}/{max_posts} 个帖子，尝试加载更多")
-            
-            # 尝试加载更多帖子
-            if not self._load_more_posts():
-                logger.info("没有更多帖子可加载，停止加载")
-                break
-                
-            # 处理新加载的帖子
-            new_posts = self._get_and_process_posts(post_container_selector, extract_post_info_func, 
-                                                 cutoff_time, processed_ids, results)
-            
-            # 如果没有获取到新帖子，停止加载
-            if not new_posts:
-                logger.info("没有获取到新帖子，停止加载")
-                break
-                
-            # 如果已达到目标数量，停止加载
-            if len(results) >= max_posts:
-                logger.info(f"已达到目标数量: {max_posts}，停止加载")
-                break
-                
+        # 爬取帖子
+        posts = self._scrape_posts(post_container_selector, content_box_selector, 
+                                  extract_post_info_func, cutoff_datetime, 
+                                  processed_ids, results, section, max_posts)
+        
         logger.info(f"从 '{section}' 版块共获取了 {len(results)} 个帖子")
         return results
         
-    def _get_and_process_posts(self, post_container_selector: str, extract_post_info_func: Callable,
-                              cutoff_time: Optional[str], processed_ids: set, results: list) -> List[Any]:
-        """获取并处理帖子"""
+    def _scrape_posts(self, post_container_selector: str, content_box_selector: str,
+                     extract_post_info_func: Callable, cutoff_datetime: Optional[datetime.datetime], 
+                     processed_ids: set, results: list, section: str, max_posts: int) -> List[Dict[str, Any]]:
+        """爬取帖子"""
         try:
-            # 获取帖子元素
-            posts = self.page.query_selector_all(post_container_selector)
+            # 记录截止日期时间
+            if cutoff_datetime:
+                logger.info(f"使用截止日期时间: {cutoff_datetime}")
             
-            if not posts:
-                logger.warning(f"未找到帖子元素，选择器: {post_container_selector}")
+            # 获取帖子容器元素
+            logger.info(f"查找帖子容器，使用选择器: '{post_container_selector}'")
+            containers = self.page.query_selector_all(post_container_selector)
+            
+            if not containers:
+                logger.error(f"未找到帖子容器，选择器: '{post_container_selector}'")
+                # 输出部分DOM结构以便调试
+                if self.debug:
+                    try:
+                        html = self.page.content()
+                        logger.debug(f"页面HTML前200字符: {html[:200]}...")
+                    except Exception:
+                        pass
                 return []
                 
-            logger.info(f"找到 {len(posts)} 个帖子元素")
+            logger.info(f"找到 {len(containers)} 个帖子容器")
             
-            # 处理帖子
-            processed_posts = []
-            for post in posts:
-                # 提取帖子ID或使用元素内容哈希作为ID
-                post_id = post.get_attribute("id") or hash(post.inner_html())
+            # 在容器中查找内容盒子
+            all_processed_posts = []
+            
+            for i, container in enumerate(containers):
+                if len(results) >= max_posts:
+                    logger.info(f"已达到目标帖子数 {max_posts}，停止处理")
+                    break
+                    
+                logger.info(f"处理容器 #{i+1}")
                 
-                # 如果已处理过该帖子，跳过
-                if post_id in processed_ids:
+                # 查找内容盒子
+                content_boxes = container.query_selector_all(content_box_selector)
+                if not content_boxes:
+                    logger.warning(f"在容器 #{i+1} 中未找到内容盒子，选择器: '{content_box_selector}'")
                     continue
                     
-                # 提取帖子信息
-                post_info = extract_post_info_func(post)
-                post_info["section"] = post_info.get("section", "") or section
+                logger.info(f"在容器 #{i+1} 中找到 {len(content_boxes)} 个内容盒子")
                 
-                # 检查是否在截止时间之前
-                if cutoff_time and post_info.get("time", "") < cutoff_time:
-                    logger.info(f"帖子时间 {post_info.get('time')} 早于截止时间 {cutoff_time}，跳过")
-                    continue
+                for box in content_boxes:
+                    # 提取帖子ID
+                    post_id = box.get_attribute("id") or hash(box.inner_html())
                     
-                # 添加到结果
-                results.append(post_info)
-                processed_ids.add(post_id)
-                processed_posts.append(post)
+                    # 如果已处理过该帖子，跳过
+                    if post_id in processed_ids:
+                        continue
+                        
+                    # 提取帖子信息
+                    post_info = extract_post_info_func(box)
+                    post_info["section"] = section
+                    
+                    # 检查是否在截止时间之后
+                    if cutoff_datetime:
+                        post_date = post_info.get("date", datetime.datetime.now().strftime("%Y.%m.%d"))
+                        post_time = post_info.get("time", "")
+                        try:
+                            # 确保时间格式统一，添加秒数如果没有
+                            if post_time and post_time.count(':') == 1:
+                                post_time += ':00'
+                            
+                            # 构建帖子的完整日期时间对象
+                            post_datetime = datetime.datetime.strptime(f"{post_date} {post_time}", "%Y.%m.%d %H:%M:%S")
+                            
+                            # 比较帖子时间与截止时间 - 只保留严格晚于截止时间的帖子
+                            if post_datetime > cutoff_datetime:
+                                logger.info(f"帖子时间 {post_datetime} 晚于截止时间 {cutoff_datetime}，保留")
+                                # 添加到结果
+                                results.append(post_info)
+                                processed_ids.add(post_id)
+                                all_processed_posts.append(post_info)
+                            else:
+                                logger.info(f"帖子时间 {post_datetime} 不晚于截止时间 {cutoff_datetime}，跳过")
+                        except ValueError as e:
+                            logger.warning(f"解析帖子时间出错: {post_date} {post_time}, {e}")
+                    else:
+                        # 如果没有截止时间限制，直接添加到结果
+                        results.append(post_info)
+                        processed_ids.add(post_id)
+                        all_processed_posts.append(post_info)
+                    
+                    if len(results) >= max_posts:
+                        break
                 
-            return processed_posts
+            # 尝试加载更多帖子，直到达到目标数量
+            attempts = 0
+            while len(results) < max_posts and attempts < 3:
+                attempts += 1
+                logger.info(f"已获取 {len(results)}/{max_posts} 个帖子，尝试加载更多 (尝试 {attempts}/3)")
+                
+                # 尝试加载更多帖子
+                if not self._load_more_posts():
+                    logger.info("没有更多帖子可加载，停止加载")
+                    break
+                    
+                # 获取新容器
+                new_containers = self.page.query_selector_all(post_container_selector)
+                if len(new_containers) <= len(containers):
+                    logger.info("加载更多后未发现新帖子，停止加载")
+                    break
+                    
+                logger.info(f"加载更多后，帖子容器数从 {len(containers)} 增加到 {len(new_containers)}")
+                
+                # 处理新增的容器
+                for i in range(len(containers), len(new_containers)):
+                    if len(results) >= max_posts:
+                        break
+                        
+                    container = new_containers[i]
+                    logger.info(f"处理新容器 #{i+1}")
+                    
+                    # 查找内容盒子
+                    content_boxes = container.query_selector_all(content_box_selector)
+                    if not content_boxes:
+                        continue
+                        
+                    logger.info(f"在新容器 #{i+1} 中找到 {len(content_boxes)} 个内容盒子")
+                    
+                    for box in content_boxes:
+                        # 提取帖子ID
+                        post_id = box.get_attribute("id") or hash(box.inner_html())
+                        
+                        # 如果已处理过该帖子，跳过
+                        if post_id in processed_ids:
+                            continue
+                            
+                        # 提取帖子信息
+                        post_info = extract_post_info_func(box)
+                        post_info["section"] = section
+                        
+                        # 检查是否在截止时间之后
+                        if cutoff_datetime:
+                            post_date = post_info.get("date", datetime.datetime.now().strftime("%Y.%m.%d"))
+                            post_time = post_info.get("time", "")
+                            try:
+                                # 确保时间格式统一，添加秒数如果没有
+                                if post_time and post_time.count(':') == 1:
+                                    post_time += ':00'
+                                
+                                # 构建帖子的完整日期时间对象
+                                post_datetime = datetime.datetime.strptime(f"{post_date} {post_time}", "%Y.%m.%d %H:%M:%S")
+                                
+                                # 比较帖子时间与截止时间 - 只保留严格晚于截止时间的帖子
+                                if post_datetime > cutoff_datetime:
+                                    logger.info(f"帖子时间 {post_datetime} 晚于截止时间 {cutoff_datetime}，保留")
+                                    # 添加到结果
+                                    results.append(post_info)
+                                    processed_ids.add(post_id)
+                                    all_processed_posts.append(post_info)
+                                else:
+                                    logger.info(f"帖子时间 {post_datetime} 不晚于截止时间 {cutoff_datetime}，跳过")
+                            except ValueError as e:
+                                logger.warning(f"解析帖子时间出错: {post_date} {post_time}, {e}")
+                        else:
+                            # 如果没有截止时间限制，直接添加到结果
+                            results.append(post_info)
+                            processed_ids.add(post_id)
+                            all_processed_posts.append(post_info)
+                        
+                        if len(results) >= max_posts:
+                            break
+                
+                # 更新容器列表
+                containers = new_containers
+                
+            return all_processed_posts
             
         except Exception as e:
-            log_error(logger, "获取和处理帖子时出错", e, self.debug)
+            log_error(logger, "爬取帖子时出错", e, self.debug)
             return []
             
     def _load_more_posts(self) -> bool:
         """加载更多帖子"""
         try:
+            # 导入加载更多按钮选择器
+            try:
+                from chose_one_agent.modules.sections_config import get_selector
+                load_more_selector = get_selector("load_more")
+                logger.info(f"使用加载更多按钮选择器: '{load_more_selector}'")
+            except ImportError:
+                logger.warning("无法导入选择器配置，使用默认加载更多按钮选择器")
+                load_more_selector = "button:has-text('加载更多')"
+            
             # 尝试点击"加载更多"按钮
-            more_button = self.page.query_selector("text='加载更多', .load-more, button:has-text('加载更多')")
+            more_button = self.page.query_selector(load_more_selector)
             if more_button and more_button.is_visible():
                 logger.info("找到'加载更多'按钮，点击加载")
                 more_button.click()
-                time.sleep(2)  # 等待加载完成
+                time.sleep(SCRAPER_CONSTANTS["page_load_wait"])  # 等待加载完成
                 return True
                 
             # 尝试滚动到页面底部触发加载
             logger.info("未找到'加载更多'按钮，尝试滚动加载")
             current_height = self.page.evaluate("document.body.scrollHeight")
             self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(2)
+            time.sleep(SCRAPER_CONSTANTS["page_load_wait"])
             
             # 检查是否滚动触发了加载
             new_height = self.page.evaluate("document.body.scrollHeight")
