@@ -1,6 +1,6 @@
-    # ChoseOne财经网站分析智能体
+# 财经网站分析智能体
 
-这是一个自动化工具，用于抓取并分析财经网站ChoseOne.cn的内容。
+这是一个自动化工具，用于抓取并分析财经网站BASE_URL的内容。
 
 ## 功能
 
@@ -24,11 +24,9 @@
    - 提供所有爬虫的基类和通用功能
    - 定义通用选择器和页面交互方法
 
-3. 电报爬虫模块 (modules/telegraph/)
-   - xtelegraph_scraper.py: 协调不同板块爬虫的主类
+3. 电报爬虫模块 (modules/)
    - post_extractor.py: 专注于帖子信息提取
    - comment_extractor.py: 专注于评论提取
-   - navigation.py: 处理页面导航和板块定位
 
 5. 情感分析模块 (modules/sentiment/)
    - base_analyzer.py: 情感分析基类
@@ -36,12 +34,7 @@
    - deepseek_analyzer.py: DeepSeek API集成
    - 关键词分析模块 (analyzers/keyword_analyzer.py)
 
-6. 关键词分析模块 (analyzers/keyword_analyzer.py)
-   - 文本清理
-   - 关键词提取和排序
-   - 财经术语检测
-
-7. 工具模块 (utils/)
+6. 工具模块 (utils/)
    - 日期处理
    - 文本处理
    - 辅助函数
@@ -147,4 +140,58 @@ Deepseek情感分析：正面 (得分: 0.85)
 相关股票：xxx公司(看多), yyy公司(中性)
 建议：可关注公司后续产品发布会进展
 --------------------------------------------------
+```
+
+# 代码重构说明
+
+## 文本分析器重构
+
+为了减少代码行数和文件数量，我们对文本分析相关的代码进行了重构：
+
+### 主要变更
+
+1. 将以下三个文件整合为一个文件：
+   - `chose_one_agent/analyzers/base_analyzer.py`
+   - `chose_one_agent/analyzers/keyword_analyzer.py`
+   - `chose_one_agent/modules/telegraph/analyzer.py` (部分功能)
+
+2. 新创建了统一的文本分析器类：
+   - `chose_one_agent/analyzers/text_analyzer.py` 包含 `TextAnalyzer` 类
+
+3. 重写了 Telegraph 分析器：
+   - 现在 `TelegraphAnalyzer` 使用 `TextAnalyzer` 作为分析引擎
+
+### 使用方法变更
+
+如果您之前直接使用 `BaseAnalyzer` 或 `KeywordAnalyzer`，需要更新导入路径：
+
+```python
+# 旧的导入方式
+from chose_one_agent.analyzers.base_analyzer import BaseAnalyzer
+from chose_one_agent.analyzers.keyword_analyzer import KeywordAnalyzer, FINANCIAL_TERMS
+
+# 新的导入方式
+from chose_one_agent.analyzers.text_analyzer import TextAnalyzer, FINANCIAL_TERMS
+```
+
+### 功能调用示例
+
+```python
+# 创建文本分析器
+analyzer = TextAnalyzer(
+    sentiment_analyzer_type="snownlp",  # 可选: "snownlp", "deepseek", "simple"
+    deepseek_api_key=None,  # DeepSeek API密钥，可选
+    min_keyword_length=2,  # 关键词最小长度
+    max_keywords=10,  # 最大关键词数量
+    custom_stopwords=None,  # 自定义停用词
+    custom_keywords=None,  # 自定义关键词
+    debug=False  # 是否开启调试模式
+)
+
+# 关键词分析
+keywords = analyzer.extract_keywords("这是一段测试文本，关于股票市场的分析", top_n=5)
+keyword_results = analyzer.analyze_text("这是一段测试文本，关于股票市场的分析")
+
+# 情感分析
+sentiment = analyzer.analyze_sentiment("股市上涨，投资者信心增强")
 ```

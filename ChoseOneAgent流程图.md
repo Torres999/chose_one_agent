@@ -1,215 +1,126 @@
 # ChoseOneAgent项目流程图分析
 
-本文档包含ChoseOneAgent项目的详细流程图，展示了项目的主要执行流程和关键逻辑节点。
+本文档包含ChoseOneAgent项目的精简流程图，展示了项目的主要执行流程和关键逻辑节点。
 
-## 主程序流程图
+## 综合流程图
 
 ```mermaid
 graph TD
-    A[程序入口] --> B[解析命令行参数]
-    B --> C[配置日志记录]
-    C --> D[解析截止日期]
-    D --> E[初始化TelegraphScraper]
-    E --> F[运行爬虫获取电报内容]
-    F --> G[格式化分析结果]
-    G --> H[输出分析结果]
+    %% 主程序流程
+    Start[程序入口] --> ParseArgs[解析命令行参数]
+    ParseArgs --> InitLog[配置日志记录]
+    InitLog --> ParseDate[解析截止日期]
+    ParseDate --> InitScraper[初始化爬虫]
     
+    %% 命令行参数
     subgraph 命令行参数
-        B1[截止日期cutoff_date] 
-        B2[无头模式headless]
-        B3[爬取板块sections]
-        B4[调试模式debug]
-        B5[情感分析器类型]
-        B6[DeepSeek API密钥]
-    end
-```
-
-## 爬虫初始化流程图
-
-```mermaid
-graph TD
-    A[初始化BaseTelegraphScraper] --> B{选择情感分析器}
-    B -->|deepseek| C[初始化DeepSeekSentimentAnalyzer]
-    B -->|snownlp| D[初始化SnowNLP情感分析器]
-    C --> E[初始化关键词分析器KeywordAnalyzer]
-    D --> E
-    E --> F[设置调试模式和选择器]
-```
-
-## 电报爬取主流程图
-
-```mermaid
-graph TD
-    A[开始爬取] --> B[遍历需要爬取的板块]
-    B --> C[导航到指定板块]
-    C --> D[等待页面加载完成]
-    D --> E[获取帖子元素列表]
-    E --> F[对每个帖子元素进行处理]
-    F --> G[提取帖子信息]
-    G --> H{是否为有效帖子?}
-    H -->|是| I[分析帖子内容]
-    H -->|否| J[跳过]
-    
-    subgraph 有效帖子判断
-      H1{是否有时间标记?} 
-      H2{是否在截止日期后?}
-      H3{是否有标题?}
-      H1 -->|否| H4[不是有效帖子]
-      H1 -->|是| H2
-      H2 -->|否| H6[设置达到截止日期标志]
-      H6 --> H4
-      H2 -->|是| H3
-      H3 -->|是| H5[是有效帖子]
-      H3 -->|否| H4
+        Arg1[截止日期cutoff_date] 
+        Arg2[无头模式headless]
+        Arg3[爬取板块sections]
+        Arg4[调试模式debug]
+        Arg5[情感分析器类型]
+        Arg6[DeepSeek API密钥]
     end
     
-    I --> K[添加到结果列表]
-    K --> L[继续下一个帖子]
-    L --> F
-    J --> L
-    F -->|所有帖子处理完毕| O{是否达到截止日期?}
-    O -->|是| M[处理下一个板块]
-    O -->|否| P{尝试加载更多内容}
-    P -->|成功| E
-    P -->|失败| M
-    M --> B
-    B -->|所有板块处理完毕| N[返回分析结果]
-```
-
-## 导航到指定板块流程图（后续可以根据每次执行的日志优化、调整顺序）
-
-```mermaid
-graph TD
-    A[导航到指定板块] --> B[访问基本URL]
-    B --> C{当前URL是否包含目标板块?}
-    C -->|是| D[返回导航成功]
-    C -->|否| E[生成多种板块名称变体]
-    E --> F[尝试使用多种选择器查找并点击板块链接]
-    F --> G{是否找到并成功点击?}
-    G -->|是| H[等待导航完成并验证]
-    G -->|否| I[尝试直接访问可能的URL]
-    I --> J{直接访问URL是否成功?}
-    J -->|是| K[验证页面内容并返回]
-    J -->|否| L[使用JavaScript尝试查找并点击]
-    L --> M{JavaScript点击是否成功?}
-    M -->|是| N[验证导航结果]
-    M -->|否| O[检查是否已在电报页面]
-    O -->|是| P[模拟成功并返回]
-    O -->|否| Q[返回导航失败]
-```
-
-## 帖子分析流程图
-
-```mermaid
-graph TD
-    A[分析帖子] --> B[初始化结果字典]
-    B --> C[获取评论计数和内容]
-    C --> E[提取帖子评论]
-    E --> F{是否有评论?}
-    F -->|有| G[进行基础情感分析]
-    F -->|无| H[设置为无评论状态]
-    G --> I[计算情感得分和标签]
-    I --> J[对评论内容进行关键词分析]
-    J --> K{是否使用DeepSeek分析器?}
-    K -->|是| L[进行DeepSeek详细情感分析]
-    K -->|否| M[跳过DeepSeek详细分析]
-    L --> N[合并所有分析结果]
-    M --> N
-    H --> N
-    N --> O[返回完整分析结果]
-```
-
-## 评论获取流程图
-
-```mermaid
-graph TD
-    A[获取评论] --> B[保存当前URL和标题]
-    B --> C[提取评论计数]
-    C --> D{是否为电报网站?}
-    D -->|是| E[尝试获取评论详情链接]
-    D -->|否| P[使用通用评论提取逻辑]
-    E --> F{是否找到详情链接?}
-    F -->|是| G[访问详情页并提取评论]
-    F -->|否| H[尝试直接点击评论按钮]
-    G --> I{是否获取到评论?}
-    I -->|是| J[返回评论结果]
-    I -->|否| H
-    H --> K{是否成功点击?}
-    K -->|是| L[等待并提取评论]
-    K -->|否| M[尝试通过URL参数访问评论页]
-    L --> N{是否获取到评论?}
-    N -->|是| J
-    N -->|否| M
-    M --> O{是否获取到评论?}
-    O -->|是| J
-    O -->|否| P
-    P --> Q{是否获取到评论?}
-    Q -->|是| J
-    Q -->|否| R[记录提取结果并返回空列表]
-```
-
-## 情感分析流程图
-
-```mermaid
-graph TD
-    A[情感分析] --> B{有评论吗?}
-    B -->|无| C[返回0分]
-    B -->|有| D{使用DeepSeek分析器?}
-    D -->|是| E[调用DeepSeek API批量分析]
-    D -->|否| F[使用简单情感分析方法]
-    E --> G[返回API给出的得分]
-    F --> H[统计正面词和负面词]
-    H --> I[计算情感比例]
-    I --> J[根据比例确定情感得分1-5]
-    J --> K[返回情感得分]
-    G --> K
-```
-
-## DeepSeek详细情感分析流程图
-
-```mermaid
-graph TD
-    A[DeepSeek详细分析] --> B{有评论吗?}
-    B -->|无| C[返回空字符串]
-    B -->|有| D[获取整体评论情感]
-    D --> E[计算情感分布]
-    E --> F[提取情感关键词]
-    F --> G[生成市场情绪]
-    G --> H[组装详细分析结果]
-    H --> I[添加代表性评论示例]
-    I --> J[返回分析文本]
-```
-
-## 关键词分析流程图
-
-```mermaid
-graph TD
-    A[关键词分析] --> B[清理文本]
-    B --> C[提取单词并过滤停用词]
-    C --> D[统计关键词出现频率]
-    D --> E[按频率排序关键词]
-    E --> F[检测财经术语]
-    F --> G[组装分析结果]
-    G --> H[返回关键词分析结果]
-```
-
-## 帖子信息提取流程图
-
-```mermaid
-graph TD
-    A[提取帖子信息] --> B[初始化结果字典]
-    B --> C[提取时间信息]
-    C --> D{是否有时间标记?}
-    D -->|无| E[认为不是有效帖子]
-    D -->|有| F[提取日期信息]
-    F --> G{是否找到日期?}
-    G -->|无| H[使用当天日期]
-    G -->|有| I[提取标题]
-    H --> I
-    I --> J[提取评论数]
-    J --> K[设置帖子有效性]
-    K --> L[返回帖子信息]
-    E --> L
+    %% 爬虫初始化
+    InitScraper --> ChooseAnalyzer{选择情感分析器}
+    ChooseAnalyzer -->|deepseek| InitDeepSeek[初始化DeepSeek分析器]
+    ChooseAnalyzer -->|snownlp| InitSnowNLP[初始化SnowNLP分析器]
+    InitDeepSeek --> InitKeyword[初始化关键词分析器]
+    InitSnowNLP --> InitKeyword
+    InitKeyword --> StartScrape[开始爬取]
+    
+    %% 主爬取流程
+    StartScrape --> LoopSections[遍历板块]
+    LoopSections --> Navigate[导航到指定板块]
+    
+    %% 导航逻辑
+    Navigate --> NavBase[访问基本URL]
+    NavBase --> CheckURL{URL包含目标板块?}
+    CheckURL -->|是| NavSuccess[导航成功]
+    CheckURL -->|否| TryVariants[尝试多种导航方法]
+    TryVariants --> NavResult{导航结果}
+    NavResult -->|成功| NavSuccess
+    NavResult -->|失败| NavFail[导航失败]
+    NavSuccess --> WaitPageLoad[等待页面加载]
+    
+    %% 帖子处理流程
+    WaitPageLoad --> GetPosts[获取帖子列表]
+    GetPosts --> ProcessPost[处理每个帖子]
+    ProcessPost --> ExtractInfo[提取帖子信息]
+    
+    %% 帖子信息提取
+    ExtractInfo --> CheckTime{有时间标记?}
+    CheckTime -->|无| InvalidPost[无效帖子]
+    CheckTime -->|有| CheckDate{是否在截止日期后?}
+    CheckDate -->|否| ReachCutoff[设置达到截止日期标志]
+    CheckDate -->|是| CheckTitle{是否有标题?}
+    CheckTitle -->|否| InvalidPost
+    CheckTitle -->|是| ValidPost[有效帖子]
+    
+    %% 有效帖子处理
+    ValidPost --> AnalyzePost[分析帖子内容]
+    InvalidPost --> NextPost[处理下一帖子]
+    ReachCutoff --> InvalidPost
+    
+    %% 帖子分析流程
+    AnalyzePost --> FetchComments[获取评论]
+    
+    %% 评论获取逻辑
+    FetchComments --> SaveURLTitle[保存URL和标题]
+    SaveURLTitle --> ExtractCommentCount[提取评论计数]
+    ExtractCommentCount --> IsTelegraph{是否为电报网站?}
+    IsTelegraph -->|是| TryMultipleMethods[尝试多种方法获取评论]
+    IsTelegraph -->|否| GenericExtract[通用评论提取]
+    TryMultipleMethods --> CommentsResult{获取结果}
+    GenericExtract --> CommentsResult
+    CommentsResult -->|成功| GotComments[获取到评论]
+    CommentsResult -->|失败| NoComments[无评论]
+    
+    %% 情感与关键词分析
+    GotComments --> BasicSentiment[基础情感分析]
+    NoComments --> SetNoComment[设置无评论状态]
+    
+    %% 情感分析流程
+    BasicSentiment --> AnalyzeType{分析器类型?}
+    AnalyzeType -->|DeepSeek| DeepSeekAnalysis[DeepSeek详细分析]
+    AnalyzeType -->|SnowNLP| SimpleAnalysis[简单情感分析]
+    
+    DeepSeekAnalysis --> CalcSentiment[计算情感得分]
+    SimpleAnalysis --> WordStats[统计正负面词]
+    WordStats --> CalcRatio[计算情感比例]
+    CalcRatio --> CalcSentiment
+    
+    %% 关键词分析
+    CalcSentiment --> KeywordAnalysis[关键词分析]
+    KeywordAnalysis --> CleanText[清理文本]
+    CleanText --> ExtractWords[提取词汇并过滤]
+    ExtractWords --> CountKeywords[统计关键词频率]
+    CountKeywords --> SortKeywords[排序关键词]
+    SortKeywords --> DetectTerms[检测财经术语]
+    
+    %% 合并分析结果
+    DetectTerms --> MergeResults[合并分析结果]
+    DeepSeekAnalysis --> MergeResults
+    SetNoComment --> MergeResults
+    MergeResults --> AddToList[添加到结果列表]
+    
+    %% 继续流程
+    AddToList --> NextPost
+    NextPost --> CheckMorePosts{更多帖子?}
+    CheckMorePosts -->|是| ProcessPost
+    CheckMorePosts -->|否| CheckCutoff{达到截止日期?}
+    CheckCutoff -->|是| NextSection[下一个板块]
+    CheckCutoff -->|否| TryLoadMore{尝试加载更多}
+    TryLoadMore -->|成功| GetPosts
+    TryLoadMore -->|失败| NextSection
+    NextSection --> CheckMoreSections{更多板块?}
+    CheckMoreSections -->|是| LoopSections
+    CheckMoreSections -->|否| FormatResults[格式化结果]
+    
+    %% 结束流程
+    FormatResults --> OutputResults[输出分析结果]
+    OutputResults --> End[结束]
 ```
 
 ## 项目总结

@@ -1,29 +1,23 @@
 # -*- coding: utf-8 -*-
 import argparse
 import datetime
-import logging
 import sys
-import traceback
 import os
 from typing import List, Dict, Any
 
-from chose_one_agent.modules.telegraph import TelegraphScraper
-from chose_one_agent.utils.helpers import format_output
+from chose_one_agent.scrapers.base_scraper import BaseScraper
+from chose_one_agent.utils.extraction import format_output
+from chose_one_agent.utils.datetime_utils import parse_cutoff_date
+from chose_one_agent.utils.logging_utils import setup_logging, log_error
+from chose_one_agent.utils.config import SCRAPER_CONFIG
+from chose_one_agent.utils.constants import DEFAULT_CUTOFF_DAYS
 from dotenv import load_dotenv
 
 # 加载环境变量
 load_dotenv()
 
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(message)s',
-    handlers=[
-        logging.FileHandler("chose_one_agent.log"),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
+# 设置日志
+logger = setup_logging("chose_one_agent.main")
 
 def parse_args():
     """
@@ -42,14 +36,14 @@ def parse_args():
     parser.add_argument(
         "--headless",
         action="store_true",
-        default=True,
+        default=SCRAPER_CONFIG["default_headless"],
         help="是否使用无头模式运行浏览器"
     )
     parser.add_argument(
         "--sections",
         type=str,
         nargs="+",
-        default=["看盘", "公司"],
+        default=SCRAPER_CONFIG["default_sections"],
         help="要爬取的电报子板块，例如'看盘'、'公司'等"
     )
     parser.add_argument(
@@ -72,27 +66,6 @@ def parse_args():
         help="DeepSeek API密钥，当选择deepseek情感分析器时必需。也可通过DEEPSEEK_API_KEY环境变量设置"
     )
     return parser.parse_args()
-
-def parse_cutoff_date(cutoff_date_str: str) -> datetime.datetime:
-    """
-    解析截止日期字符串
-    
-    Args:
-        cutoff_date_str: 截止日期时间字符串，格式为'YYYY-MM-DD HH:MM'
-        
-    Returns:
-        datetime对象
-    """
-    if not cutoff_date_str:
-        # 默认为当前时间前24小时
-        return datetime.datetime.now() - datetime.timedelta(days=1)
-    
-    try:
-        return datetime.datetime.strptime(cutoff_date_str, "%Y-%m-%d %H:%M")
-    except ValueError as e:
-        logger.error(f"无效的截止日期格式: {cutoff_date_str}，应为'YYYY-MM-DD HH:MM': {e}")
-        # 默认为当前时间前24小时
-        return datetime.datetime.now() - datetime.timedelta(days=1)
 
 def format_results(results: List[Dict[str, Any]]) -> str:
     """
@@ -160,15 +133,11 @@ def run_telegraph_scraper(cutoff_date: datetime.datetime, sections: List[str], h
         分析结果列表
     """
     # 处理并清理板块名称，确保没有空白符和无效字符
-    processed_sections = []
-    for section in sections:
-        section = section.strip()
-        if section:  # 确保不是空字符串
-            processed_sections.append(section)
+    processed_sections = [s.strip() for s in sections if s.strip()]
     
     # 如果处理后没有有效的板块，使用默认值
     if not processed_sections:
-        processed_sections = ["看盘", "公司"]
+        processed_sections = SCRAPER_CONFIG["default_sections"]
         
     logger.info(f"开始爬取电报，截止日期: {cutoff_date}, 子板块: {processed_sections}")
     
@@ -185,28 +154,25 @@ def run_telegraph_scraper(cutoff_date: datetime.datetime, sections: List[str], h
         elif debug:
             logger.info("已设置DeepSeek API密钥")
     
-    # 如果是调试模式，设置日志级别为DEBUG
-    if debug:
-        logging.getLogger("chose_one_agent").setLevel(logging.DEBUG)
-    
     try:
-        # 不使用上下文管理器，直接创建实例
-        scraper = TelegraphScraper(
+        # 创建爬虫实例
+        scraper = BaseScraper(
             cutoff_date=cutoff_date, 
             headless=headless, 
             debug=debug,
             sentiment_analyzer_type=sentiment_analyzer,
             deepseek_api_key=deepseek_api_key
         )
-        results = scraper.run(processed_sections)
+        
+        # 运行爬虫
+        results = scraper.run_telegraph_scraper(processed_sections)
         
         # 仅在调试模式下显示详细日志
         if debug:
             logger.info(f"电报爬取完成，共处理了 {len(results)} 条电报")
         return results
     except Exception as e:
-        logger.error(f"运行电报爬虫时出错: {e}")
-        logger.error(traceback.format_exc())
+        log_error(logger, "运行电报爬虫时出错", e, debug)
         return []
 
 def main():
@@ -219,7 +185,6 @@ def main():
     
     # 如果是调试模式，显示所有参数
     if args.debug:
-        logger.setLevel(logging.DEBUG)
         logger.debug(f"命令行参数: {args}")
         logger.debug(f"截止日期: {cutoff_date}")
     
@@ -245,8 +210,7 @@ def main():
             logger.info(f"分析完成，共处理了 {len(results)} 条内容")
         
     except Exception as e:
-        logger.error(f"运行过程中出错: {e}")
-        logger.error(traceback.format_exc())
+        log_error(logger, "运行过程中出错", e, args.debug)
         sys.exit(1)
 
 if __name__ == "__main__":
