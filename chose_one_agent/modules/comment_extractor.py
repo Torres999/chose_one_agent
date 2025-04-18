@@ -17,9 +17,6 @@ from chose_one_agent.analyzers.sentiment_analyzer import SentimentAnalyzer
 from chose_one_agent.utils.logging_utils import get_logger, log_error
 from chose_one_agent.utils.config import BASE_URL
 
-# 使用延迟导入 TelegraphAnalyzer 以避免循环导入问题
-# from chose_one_agent.modules.telegraph_analyzer import TelegraphAnalyzer
-
 # 获取日志记录器
 logger = get_logger(__name__)
 

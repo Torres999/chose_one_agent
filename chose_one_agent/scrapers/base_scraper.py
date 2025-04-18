@@ -133,13 +133,8 @@ class BaseScraper:
                 self.sentiment_analyzer_type, self.deepseek_api_key
             )
             
-            # 尝试导入KeywordAnalyzer，但如果不存在不会影响主要功能
-            try:
-                from chose_one_agent.analyzers.keyword_analyzer import KeywordAnalyzer
-                self._keyword_analyzer = KeywordAnalyzer()
-            except ImportError:
-                logger.warning("KeywordAnalyzer模块不存在，将不使用关键词分析功能")
-                self._keyword_analyzer = None
+            # 不再尝试导入KeywordAnalyzer
+            self._keyword_analyzer = None
             
         except ImportError as e:
             # 这些组件可能不是所有爬虫都需要的，记录日志但不终止程序
