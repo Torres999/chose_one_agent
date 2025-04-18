@@ -656,26 +656,62 @@ class BaseNavigator:
                 logger.info(f"使用加载更多按钮选择器: '{load_more_selector}'")
             except ImportError:
                 logger.warning("无法导入选择器配置，使用默认加载更多按钮选择器")
-                load_more_selector = "button:has-text('加载更多')"
+                load_more_selector = "div.f-s-14.list-more-button.more-button"
             
-            # 尝试点击"加载更多"按钮
+            # 尝试点击"加载更多"按钮 - 增加多种尝试方法
+            # 第一种：使用配置选择器
             more_button = self.page.query_selector(load_more_selector)
             if more_button and more_button.is_visible():
                 logger.info("找到'加载更多'按钮，点击加载")
                 more_button.click()
-                time.sleep(SCRAPER_CONSTANTS["page_load_wait"])  # 等待加载完成
+                time.sleep(SCRAPER_CONSTANTS["page_load_wait"] * 2)  # 增加等待时间
                 return True
+            
+            # 第二种：尝试使用文本内容查找
+            more_button_by_text = self.page.query_selector("div:has-text('加载更多')")
+            if more_button_by_text and more_button_by_text.is_visible():
+                logger.info("通过文本内容找到'加载更多'按钮，点击加载")
+                more_button_by_text.click()
+                time.sleep(SCRAPER_CONSTANTS["page_load_wait"] * 2)
+                return True
+                
+            # 第三种：使用XPath尝试查找
+            try:
+                more_button_xpath = self.page.query_selector("//div[contains(text(), '加载更多')]")
+                if more_button_xpath and more_button_xpath.is_visible():
+                    logger.info("通过XPath找到'加载更多'按钮，点击加载")
+                    more_button_xpath.click()
+                    time.sleep(SCRAPER_CONSTANTS["page_load_wait"] * 2)
+                    return True
+            except Exception as e:
+                logger.warning(f"使用XPath查找按钮出错: {e}")
                 
             # 尝试滚动到页面底部触发加载
             logger.info("未找到'加载更多'按钮，尝试滚动加载")
+            
+            # 记录滚动前高度
             current_height = self.page.evaluate("document.body.scrollHeight")
-            self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            
+            # 先滚动到页面3/4处
+            self.page.evaluate("window.scrollTo(0, document.body.scrollHeight * 0.75)")
             time.sleep(SCRAPER_CONSTANTS["page_load_wait"])
+            
+            # 再滚动到底部
+            self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(SCRAPER_CONSTANTS["page_load_wait"] * 2)
+            
+            # 额外尝试点击可能延迟加载的按钮
+            more_button_delayed = self.page.query_selector(load_more_selector)
+            if more_button_delayed and more_button_delayed.is_visible():
+                logger.info("滚动后找到'加载更多'按钮，点击加载")
+                more_button_delayed.click()
+                time.sleep(SCRAPER_CONSTANTS["page_load_wait"] * 2)
+                return True
             
             # 检查是否滚动触发了加载
             new_height = self.page.evaluate("document.body.scrollHeight")
             if new_height > current_height:
-                logger.info("滚动触发了加载")
+                logger.info("滚动触发了加载，高度从 {} 增加到 {}".format(current_height, new_height))
                 return True
                 
             logger.info("滚动未触发加载，可能已加载全部内容")

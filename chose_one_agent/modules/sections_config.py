@@ -28,7 +28,7 @@ SELECTORS = {
     "post_title": "strong",
     
     # 加载更多按钮选择器
-    "load_more": "button:has-text('加载更多')"
+    "load_more": "div.f-s-14.list-more-button.more-button, div.f-s-14.list-more-button.more-button:has-text('加载更多')"
 }
 
 def get_section_config(section: str) -> Dict[str, Any]:

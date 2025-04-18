@@ -348,25 +348,66 @@ class BaseScraper:
             else:
                 logger.warning(f"未找到标题元素，选择器: '{title_selector}'")
             
-            # 提取日期/时间 - 在财联社电报中，时间通常位于特定的时间盒子中
-            date_el = post_element.query_selector(date_selector)
-            if date_el:
-                time_text = date_el.inner_text().strip()
-                logger.info(f"提取到时间文本: {time_text}")
-                
-                # 尝试提取时间 (如 04:00:52)
-                time_match = re.search(r'(\d{2}:\d{2}(?::\d{2})?)', time_text)
-                if time_match:
-                    result["time"] = time_match.group(1)
-                    logger.info(f"解析出时间: {result['time']}")
+            # 提取日期和时间
+            try:
+                # 1. 提取时间 - 从时间元素中获取
+                date_el = post_element.query_selector(date_selector)
+                if date_el:
+                    time_text = date_el.inner_text().strip()
+                    logger.info(f"提取到时间文本: {time_text}")
+                    
+                    # 尝试提取时间 (如 04:00:52)
+                    time_match = re.search(r'(\d{2}:\d{2}(?::\d{2})?)', time_text)
+                    if time_match:
+                        result["time"] = time_match.group(1)
+                        logger.info(f"解析出时间: {result['time']}")
+                    else:
+                        logger.warning(f"未能从时间文本中解析出时间: {time_text}")
                 else:
-                    logger.warning(f"未能从时间文本中解析出时间: {time_text}")
+                    logger.warning(f"未找到时间元素，选择器: '{date_selector}'")
                 
-                # 尝试从当前日期构建完整日期（因为电报通常只显示时间）
-                today = datetime.datetime.now().strftime("%Y.%m.%d")
-                result["date"] = today
-            else:
-                logger.warning(f"未找到时间元素，选择器: '{date_selector}'")
+                # 2. 提取日期 - 直接查找日期元素
+                date_div_selector = "div.f-s-12.f-w-b.c-de0422, div.f-w-b.c-de0422"
+                
+                # 先直接在帖子元素中查找日期元素
+                date_div = post_element.query_selector(date_div_selector)
+                
+                # 如果帖子元素中没有，再尝试在容器附近查找
+                if not date_div:
+                    # 检查post_element是否为ElementHandle对象，有evaluate方法
+                    if hasattr(post_element, 'evaluate'):
+                        try:
+                            content_box = post_element.evaluate("el => el.closest('.clearfix.m-b-15.f-s-16.telegraph-content-box') || el.closest('.clearfix.p-r.l-h-26p.o-h.telegraph-content')")
+                            # 确保content_box不是None且有evaluate方法
+                            if content_box and hasattr(content_box, 'evaluate'):
+                                parent_container = content_box.evaluate("el => el.parentElement")
+                                if parent_container:
+                                    date_div = parent_container.query_selector(date_div_selector)
+                        except Exception as e:
+                            logger.debug(f"在容器查找日期元素时出错: {e}")
+                
+                # 如果找到日期元素，提取并设置日期
+                if date_div:
+                    date_text = date_div.inner_text().strip()
+                    logger.info(f"找到日期元素，文本为: {date_text}")
+                    
+                    # 提取日期（格式如 "2025.04.17 星期四"）
+                    date_match = re.search(r'(\d{4}\.\d{1,2}\.\d{1,2})', date_text)
+                    if date_match:
+                        result["date"] = date_match.group(1)
+                        logger.info(f"成功解析日期: {result['date']}")
+                    else:
+                        logger.warning(f"无法从文本 '{date_text}' 中提取日期")
+                        result["date"] = datetime.datetime.now().strftime("%Y.%m.%d")
+                else:
+                    # 如果找不到日期元素，表示是当天的帖子
+                    result["date"] = datetime.datetime.now().strftime("%Y.%m.%d")
+                    logger.info(f"未找到日期元素，使用当天日期: {result['date']}")
+                
+            except Exception as e:
+                logger.warning(f"提取日期和时间时出错: {e}")
+                if self.debug:
+                    logger.debug(traceback.format_exc())
             
             # 标记为有效帖子 - 只检查标题是否有效，不再考虑内容
             result["is_valid_post"] = bool(result["title"] != "未知标题")
