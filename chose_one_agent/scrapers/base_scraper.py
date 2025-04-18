@@ -74,8 +74,31 @@ class BaseScraper:
         """启动浏览器"""
         try:
             self.playwright = sync_playwright().start()
-            self.browser = self.playwright.chromium.launch(headless=self.headless)
-            self.context = self.browser.new_context(viewport=SCRAPER_CONSTANTS["viewport"])
+            
+            # 创建浏览器启动选项
+            browser_options = {
+                "headless": self.headless
+            }
+            
+            # 创建浏览器上下文选项
+            context_options = {
+                "viewport": SCRAPER_CONSTANTS["viewport"],
+                # JavaScript默认已启用，无需设置
+                "bypass_csp": True,
+                # 设置权限
+                "permissions": ["geolocation", "notifications"],
+            }
+            
+            # 启动浏览器
+            self.browser = self.playwright.chromium.launch(**browser_options)
+            
+            # 创建上下文
+            self.context = self.browser.new_context(**context_options)
+            
+            # 设置路由，拦截图片请求
+            self.context.route("**/*.{png,jpg,jpeg,webp,svg,gif,ico}", lambda route: route.abort())
+            
+            # 创建页面
             self.page = self.context.new_page()
             self.navigator = BaseNavigator(self.page, self.base_url, self.debug)
             self._init_components()

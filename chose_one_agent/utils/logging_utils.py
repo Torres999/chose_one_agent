@@ -21,7 +21,7 @@ def setup_logging(
     Args:
         name: 日志记录器名称
         level: 日志级别，默认从配置获取
-        log_file: 日志文件路径，默认从配置获取
+        log_file: 日志文件路径 (不再使用，仅为兼容性保留)
         log_format: 日志格式，默认从配置获取
         propagate: 是否传播日志到父级记录器
 
@@ -30,7 +30,6 @@ def setup_logging(
     """
     # 获取日志配置
     level = level or LOG_CONFIG.get("level", "INFO")
-    log_file = log_file or LOG_CONFIG.get("file", "chose_one_agent.log")
     log_format = log_format or LOG_CONFIG.get("format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     
     # 创建日志记录器
@@ -48,18 +47,12 @@ def setup_logging(
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(numeric_level)
     
-    # 创建文件处理器
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_handler.setLevel(numeric_level)
-    
     # 创建格式化器
     formatter = logging.Formatter(log_format)
     console_handler.setFormatter(formatter)
-    file_handler.setFormatter(formatter)
     
     # 添加处理器
     logger.addHandler(console_handler)
-    logger.addHandler(file_handler)
     
     # 设置是否传播
     logger.propagate = propagate
