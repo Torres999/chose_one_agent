@@ -40,7 +40,7 @@ def format_output(title: str, date: str, time: str, sentiment: Optional[Union[st
         output += f"\n所属板块：{section}"
         
         # 只有在有评论且有情感分析结果时，才添加详细分析
-        if has_comments and comments and sentiment_analysis and sentiment_label != "无评论":
+        if has_comments and comments and sentiment_analysis and sentiment_label not in ["无评论", "分析失败"]:
             # 格式化情感分析结果
             for pattern in ["整体评论情感", "情感评分", "情感分布", "关键词", "市场情绪"]:
                 sentiment_analysis = sentiment_analysis.replace(f"- {pattern}:", f"\n- {pattern}:")
@@ -50,7 +50,11 @@ def format_output(title: str, date: str, time: str, sentiment: Optional[Union[st
             output += f"\n\n{sentiment_analysis}"
     elif isinstance(sentiment, (int, float)):
         # 评分作为整数，转换为情感描述
-        output += f"\n评论情绪：{SENTIMENT_SCORE_LABELS.get(sentiment, f'未知({sentiment})')}"
+        # 确保sentiment是整数
+        sentiment_int = round(sentiment)
+        # 确保在有效范围内
+        sentiment_int = max(0, min(sentiment_int, 5))
+        output += f"\n评论情绪：{SENTIMENT_SCORE_LABELS.get(sentiment_int, '无评论')}"
         output += f"\n所属板块：{section}"
     else:
         # 处理旧格式的字符串情感
@@ -59,8 +63,8 @@ def format_output(title: str, date: str, time: str, sentiment: Optional[Union[st
     
     # 如果有DeepSeek的分析结果
     if deepseek_analysis:
-        sentiment_label = deepseek_analysis.get("label", "中性")
-        sentiment_score = deepseek_analysis.get("score", 3)
+        sentiment_label = deepseek_analysis.get("label", "无评论")
+        sentiment_score = deepseek_analysis.get("score", 0)
         output += f"\n\nDeepSeek情感分析：{sentiment_label} (得分: {sentiment_score}/5)"
     
     return output

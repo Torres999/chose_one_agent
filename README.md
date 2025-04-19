@@ -60,7 +60,7 @@ python3 run.py --cutoff_date "2025-04-11 00:00" --sections "看盘" "公司" --s
 - `--sections`: 指定要运行的模块，可选值：
   - `看盘`: 只运行看盘板块
   - `公司`: 只运行公司板块
-- `--sentiment-analyzer`: 选择情感分析器，可选值：
+- `--sentiment-analyzer`: 选择情感分析器，可选值：默认是0分/无评论，如果程序报错不用显示“分析失败”直接终止程序运行。评论的情感分析有0、1、2、3、4、5六档，0代表没有评论、1代表消极、5代表积极。
   - `snownlp`: 使用本地SnowNLP进行情感分析（默认）
   - `deepseek`: 使用DeepSeek API进行更准确的情感分析
 - `--deepseek-api-key`: DeepSeek API密钥，当使用deepseek分析器时必需

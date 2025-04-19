@@ -1,17 +1,20 @@
 """
-基础爬虫类，供各功能模块继承使用
+基础爬虫类，所有爬虫继承自此类
 """
-import time
 import datetime
+import json
+import logging
+import random
 import re
+import time
 import traceback
-from typing import List, Dict, Any, Optional, Tuple, Union, Callable
+from typing import Dict, Any, List, Tuple, Optional, Union, Callable
 from urllib.parse import urljoin
 
 from playwright.sync_api import sync_playwright, Page, Browser, Response
 
 from chose_one_agent.utils.config import BASE_URL
-from chose_one_agent.utils.constants import SCRAPER_CONSTANTS, BASE_URLS
+from chose_one_agent.utils.constants import SCRAPER_CONSTANTS, BASE_URLS, SENTIMENT_SCORE_LABELS
 from chose_one_agent.utils.logging_utils import get_logger, log_error
 from chose_one_agent.utils.datetime_utils import is_before_cutoff, parse_datetime
 from chose_one_agent.scrapers.base_navigator import BaseNavigator
@@ -1073,131 +1076,132 @@ class BaseScraper:
             # 在返回之前，如果有评论且分析器可用，进行情感分析
             if comments and self._post_analyzer:
                 logger.info(f"对提取到的 {len(comments)} 条评论进行情感分析")
-                try:
-                    # 提取评论内容文本
-                    comment_texts = [comment["content"] for comment in comments]
+                
+                # 提取评论内容文本
+                comment_texts = [comment["content"] for comment in comments]
+                
+                # 估计评论文本总长度，用于决定是否需要批量处理
+                total_text_length = sum(len(text) for text in comment_texts)
+                max_length_per_request = 4000  # 假设API每次请求的最大长度限制
+                
+                # 情感分析结果
+                overall_score = 0  # 默认无评论
+                sentiment_label = "无评论"
+                comment_scores = {}
+                
+                if total_text_length <= max_length_per_request:
+                    # 评论总长度在限制内，一次性处理所有评论
+                    logger.info("评论总长度在限制内，进行一次性情感分析")
                     
-                    # 估计评论文本总长度，用于决定是否需要批量处理
-                    total_text_length = sum(len(text) for text in comment_texts)
-                    max_length_per_request = 4000  # 假设API每次请求的最大长度限制
+                    # 构建简单的帖子数据结构供分析器使用
+                    temp_post = {
+                        "title": "详情页评论",
+                        "url": post_url,
+                        "content": "\n".join(comment_texts)  # 合并所有评论文本作为内容
+                    }
                     
-                    # 情感分析结果
-                    overall_score = 3  # 默认中性
-                    sentiment_label = "中性"
-                    comment_scores = {}
+                    # 分析评论情感 - 传递文本而非字典对象
+                    sentiment_results = self._post_analyzer.analyze_post_data(temp_post, comment_texts)
                     
-                    if total_text_length <= max_length_per_request:
-                        # 评论总长度在限制内，一次性处理所有评论
-                        logger.info("评论总长度在限制内，进行一次性情感分析")
+                    # 获取分析结果
+                    overall_score = sentiment_results.get('sentiment_score', 0)
+                    sentiment_label = sentiment_results.get('sentiment_label', '无评论')
+                    comment_scores = sentiment_results.get("comment_scores", {})
+                else:
+                    # 评论总长度超出限制，需要分批处理
+                    logger.info(f"评论总长度({total_text_length})超出限制({max_length_per_request})，进行分批情感分析")
+                    
+                    # 将评论分成多个批次
+                    batches = []
+                    current_batch = []
+                    current_length = 0
+                    
+                    for i, text in enumerate(comment_texts):
+                        text_length = len(text)
                         
-                        # 构建简单的帖子数据结构供分析器使用
-                        temp_post = {
-                            "title": "详情页评论",
+                        # 检查当前评论是否过长
+                        if text_length > max_length_per_request:
+                            logger.warning(f"评论 #{i+1} 过长 ({text_length} 字符)，将被截断")
+                            # 截断单条评论
+                            text = text[:max_length_per_request-100]  # 留出一些余量
+                            text_length = len(text)
+                        
+                        # 检查添加当前评论是否会超出批次限制
+                        if current_length + text_length > max_length_per_request:
+                            # 当前批次已满，保存并创建新批次
+                            if current_batch:
+                                batches.append(current_batch)
+                            current_batch = [text]
+                            current_length = text_length
+                        else:
+                            # 添加到当前批次
+                            current_batch.append(text)
+                            current_length += text_length
+                    
+                    # 添加最后一个批次
+                    if current_batch:
+                        batches.append(current_batch)
+                    
+                    # 处理每个批次
+                    batch_scores = []
+                    total_weight = 0
+                    
+                    for i, batch in enumerate(batches):
+                        logger.info(f"处理评论批次 {i+1}/{len(batches)}，包含 {len(batch)} 条评论")
+                        
+                        # 为每个批次创建临时帖子
+                        batch_post = {
+                            "title": f"详情页评论批次 {i+1}",
                             "url": post_url,
-                            "content": "\n".join(comment_texts)  # 合并所有评论文本作为内容
+                            "content": "\n".join(batch)
                         }
                         
-                        # 分析评论情感 - 传递文本而非字典对象
-                        sentiment_results = self._post_analyzer.analyze_post_data(temp_post, comment_texts)
+                        # 分析当前批次
+                        batch_result = self._post_analyzer.analyze_post_data(batch_post, batch)
+                        batch_score = batch_result.get('sentiment_score', 0)
                         
-                        # 获取分析结果
-                        overall_score = sentiment_results.get('sentiment_score', 3)
-                        sentiment_label = sentiment_results.get('sentiment_label', '中性')
-                        comment_scores = sentiment_results.get("comment_scores", {})
+                        # 如果返回的是情感分析结果对象，则提取compound值
+                        if isinstance(batch_score, dict) and 'compound' in batch_score:
+                            batch_score = batch_score['compound']
+                            # 将浮点数映射到0-5的范围
+                            batch_score = round((batch_score + 1) * 2.5)  # -1到1 映射到 0到5
+                            # 确保在有效范围内
+                            batch_score = max(0, min(batch_score, 5))
+                            
+                        batch_scores.append(batch_score)
+                        
+                        # 使用批次中的评论数作为权重
+                        batch_weight = len(batch)
+                        total_weight += batch_weight
+                        
+                        # 收集各评论的情感评分
+                        batch_comment_scores = batch_result.get("comment_scores", {})
+                        
+                        # 重新映射评论索引
+                        start_idx = sum(len(batches[j]) for j in range(i))
+                        for j, score in batch_comment_scores.items():
+                            comment_scores[start_idx + j] = score
+                    
+                    # 计算加权平均情感分数
+                    if total_weight > 0:
+                        weighted_sum = sum(score * (len(batches[i]) / total_weight) for i, score in enumerate(batch_scores))
+                        overall_score = round(weighted_sum)
+                        # 确保分数在有效范围内
+                        overall_score = max(0, min(overall_score, 5))
                     else:
-                        # 评论总长度超出限制，需要分批处理
-                        logger.info(f"评论总长度({total_text_length})超出限制({max_length_per_request})，进行分批情感分析")
-                        
-                        # 将评论分成多个批次
-                        batches = []
-                        current_batch = []
-                        current_length = 0
-                        
-                        for i, text in enumerate(comment_texts):
-                            text_length = len(text)
-                            
-                            # 检查当前评论是否过长
-                            if text_length > max_length_per_request:
-                                logger.warning(f"评论 #{i+1} 过长 ({text_length} 字符)，将被截断")
-                                # 截断单条评论
-                                text = text[:max_length_per_request-100]  # 留出一些余量
-                                text_length = len(text)
-                            
-                            # 检查添加当前评论是否会超出批次限制
-                            if current_length + text_length > max_length_per_request:
-                                # 当前批次已满，保存并创建新批次
-                                if current_batch:
-                                    batches.append(current_batch)
-                                current_batch = [text]
-                                current_length = text_length
-                            else:
-                                # 添加到当前批次
-                                current_batch.append(text)
-                                current_length += text_length
-                        
-                        # 添加最后一个批次
-                        if current_batch:
-                            batches.append(current_batch)
-                        
-                        # 处理每个批次
-                        batch_scores = []
-                        total_weight = 0
-                        
-                        for i, batch in enumerate(batches):
-                            logger.info(f"处理评论批次 {i+1}/{len(batches)}，包含 {len(batch)} 条评论")
-                            
-                            # 为每个批次创建临时帖子
-                            batch_post = {
-                                "title": f"详情页评论批次 {i+1}",
-                                "url": post_url,
-                                "content": "\n".join(batch)
-                            }
-                            
-                            # 分析当前批次
-                            batch_result = self._post_analyzer.analyze_post_data(batch_post, batch)
-                            batch_score = batch_result.get('sentiment_score', 3)
-                            batch_scores.append(batch_score)
-                            
-                            # 使用批次中的评论数作为权重
-                            batch_weight = len(batch)
-                            total_weight += batch_weight
-                            
-                            # 收集各评论的情感评分
-                            batch_comment_scores = batch_result.get("comment_scores", {})
-                            
-                            # 重新映射评论索引
-                            start_idx = sum(len(batches[j]) for j in range(i))
-                            for j, score in batch_comment_scores.items():
-                                comment_scores[start_idx + j] = score
-                        
-                        # 计算加权平均情感分数
-                        if total_weight > 0:
-                            weighted_sum = sum(score * (len(batches[i]) / total_weight) for i, score in enumerate(batch_scores))
-                            overall_score = round(weighted_sum, 1)
-                        
-                        # 根据情感分数确定标签
-                        if overall_score >= 4:
-                            sentiment_label = "积极"
-                        elif overall_score <= 2:
-                            sentiment_label = "消极"
-                        else:
-                            sentiment_label = "中性"
-                        
-                        logger.info(f"完成分批情感分析，整体情感评分: {overall_score}")
+                        overall_score = 0
                     
-                    # 将分析结果添加到每条评论中
-                    for i, comment in enumerate(comments):
-                        if i in comment_scores:
-                            comment["sentiment_score"] = comment_scores[i]
-                        else:
-                            comment["sentiment_score"] = overall_score
+                    # 根据情感分数确定标签
+                    sentiment_label = SENTIMENT_SCORE_LABELS.get(overall_score, "无评论")
                     
-                    logger.info(f"评论情感分析完成，整体情感评分: {overall_score}，情感标签: {sentiment_label}")
-                except Exception as e:
-                    logger.warning(f"评论情感分析出错: {e}")
-                    if self.debug:
-                        logger.debug(traceback.format_exc())
-                        
+                    logger.info(f"完成分批情感分析，整体情感评分: {overall_score}，情感标签: {sentiment_label}")
+                
+                # 将分析结果添加到每条评论中
+                for i, comment in enumerate(comments):
+                    comment["sentiment_score"] = comment_scores.get(i, 0)
+                
+                logger.info(f"评论情感分析完成，整体情感评分: {overall_score}，情感标签: {sentiment_label}")
+                
             return comments
         
         except Exception as e:
@@ -1250,7 +1254,7 @@ class BaseScraper:
                             "comments": [],
                             "comment_count": 0,
                             "has_comments": False,
-                            "sentiment_score": 3,  # 默认为中性
+                            "sentiment_score": 0,  # 使用0表示无评论
                             "sentiment_label": "过期",
                             "sentiment_analysis": "",
                             "is_before_cutoff": True
@@ -1283,7 +1287,7 @@ class BaseScraper:
                         post_result["sentiment_label"] = sentiment_analysis.get("sentiment_label", "无评论")
                         post_result["sentiment_analysis"] = sentiment_analysis.get("insight", "")
                     else:
-                        post_result["sentiment_score"] = 3  # 默认为中性
+                        post_result["sentiment_score"] = 0  # 无评论设为0
                         post_result["sentiment_label"] = "无评论" if comment_count == 0 else "未分析"
                         post_result["sentiment_analysis"] = ""
                         
