@@ -51,33 +51,39 @@ def parse_args():
         default=False,
         help="是否启用调试模式"
     )
+    # 添加情感分析器相关参数
+    parser.add_argument(
+        "--sentiment-analyzer",
+        type=str,
+        choices=["none", "deepseek"],
+        default="none",
+        help="选择情感分析器类型"
+    )
+    parser.add_argument(
+        "--deepseek-api-key",
+        type=str,
+        default=os.environ.get("DEEPSEEK_API_KEY", ""),
+        help="DeepSeek API密钥"
+    )
     return parser.parse_args()
 
 def format_results(posts, args):
     """格式化结果输出"""
     output = []
     for title, date, time, sect, _, sentiment_analysis, text in posts:
-        # 构建情感信息字典，包含评论数量
-        comment_count = 0
-        if sentiment_analysis and isinstance(sentiment_analysis, dict):
-            comment_count = sentiment_analysis.get("total_comments", 0)
-        
-        sentiment_info = {
-            "comment_count": comment_count
-        }
-            
+        # 直接使用完整的情感分析结果
         output.append(format_output(
             title=title,
             date=date,
             time=time,
             section=sect,
-            sentiment=sentiment_info,
+            sentiment=sentiment_analysis,  # 传递完整的情感分析结果
             deepseek_analysis=None,
         ))
 
     return output
 
-def run_telegraph_scraper(cutoff_date, sections, headless, debug=False):
+def run_telegraph_scraper(cutoff_date, sections, headless, sentiment_analyzer="none", deepseek_api_key=None, debug=False):
     """
     运行电报爬虫
     
@@ -85,6 +91,8 @@ def run_telegraph_scraper(cutoff_date, sections, headless, debug=False):
         cutoff_date: 截止日期
         sections: 要爬取的电报子板块列表
         headless: 是否使用无头模式
+        sentiment_analyzer: 情感分析器类型
+        deepseek_api_key: DeepSeek API密钥
         debug: 是否启用调试模式
         
     Returns:
@@ -98,6 +106,16 @@ def run_telegraph_scraper(cutoff_date, sections, headless, debug=False):
         processed_sections = SCRAPER_CONFIG["default_sections"]
         
     logger.info("开始爬取电报，截止日期: {0}, 子板块: {1}".format(cutoff_date, processed_sections))
+    
+    # 初始化情感分析器
+    analyzer = None
+    if sentiment_analyzer == "deepseek":
+        try:
+            from chose_one_agent.analyzers.deepseek_sentiment_analyzer import DeepSeekSentimentAnalyzer
+            analyzer = DeepSeekSentimentAnalyzer(api_key=deepseek_api_key, debug=debug)
+            logger.info("成功初始化DeepSeek情感分析器")
+        except ImportError as e:
+            logger.error(f"导入DeepSeek情感分析器失败: {e}")
     
     try:
         # 创建爬虫实例
@@ -113,10 +131,34 @@ def run_telegraph_scraper(cutoff_date, sections, headless, debug=False):
         # 转换为format_results预期的格式
         results = []
         for post in raw_results:
-            # 构建包含total_comments字段的结构
+            # 提取评论
+            comments = post.get("comments", [])
+            comment_texts = []
+            if isinstance(comments, list):
+                for comment in comments:
+                    if isinstance(comment, str):
+                        comment_texts.append(comment)
+                    elif isinstance(comment, dict) and "content" in comment:
+                        comment_texts.append(comment["content"])
+            
+            # 构建情感分析结果
             sentiment_analysis = {
-                "total_comments": post.get("comment_count", 0)
+                "total_comments": len(comment_texts)
             }
+            
+            # 如果有评论且启用了情感分析器，进行情感分析
+            if comment_texts and analyzer and len(comment_texts) > 0:
+                try:
+                    logger.info(f"对帖子 '{post.get('title', '未知标题')}' 的 {len(comment_texts)} 条评论进行【情感分析】")
+                    analysis_result = analyzer.analyze_comments(comment_texts)
+                    
+                    # 合并分析结果
+                    sentiment_analysis.update(analysis_result)
+                    
+                    if debug:
+                        logger.debug(f"情感分析结果: {analysis_result}")
+                except Exception as e:
+                    logger.error(f"情感分析失败: {e}")
             
             # 创建7元素元组: (标题,日期,时间,板块,_,情感分析,内容)
             result_tuple = (
@@ -165,7 +207,9 @@ def main():
         results = run_telegraph_scraper(
             cutoff_date, 
             args.sections, 
-            args.headless, 
+            args.headless,
+            args.sentiment_analyzer,
+            args.deepseek_api_key, 
             args.debug
         )
         

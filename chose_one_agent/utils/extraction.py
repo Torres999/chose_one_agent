@@ -19,7 +19,7 @@ def format_output(title: str, date: str, time: str, sentiment: Optional[Union[st
         title: 电报标题
         date: 电报日期
         time: 电报时间
-        sentiment: 情感信息，包括评论数量
+        sentiment: 情感信息，包括评论数量和情感分析结果
         section: 所属板块（可选）
         deepseek_analysis: 参数保留但不再使用
         
@@ -32,14 +32,24 @@ def format_output(title: str, date: str, time: str, sentiment: Optional[Union[st
     # 显示评论数量字段
     comment_count = 0
     if isinstance(sentiment, dict):
-        comment_count = sentiment.get("comment_count", 0)
+        comment_count = sentiment.get("total_comments", 0)
     
     output += "\n评论数量：{0}".format(comment_count)
     
-    # 添加新字段，不设置默认值
-    output += "\n评论情绪："
-    output += "\n情感分布："
-    output += "\n关键评论："
+    # 如果评论数量大于0，添加情感分析结果
+    if comment_count > 0 and isinstance(sentiment, dict):
+        sentiment_text = sentiment.get("sentiment", "")
+        distribution_text = sentiment.get("distribution", "")
+        key_comments_text = sentiment.get("key_comments", "")
+        
+        output += "\n评论情绪：{0}".format(sentiment_text)
+        output += "\n情感分布：{0}".format(distribution_text)
+        output += "\n关键评论：{0}".format(key_comments_text)
+    else:
+        # 如果没有评论，则显示空值
+        output += "\n评论情绪："
+        output += "\n情感分布："
+        output += "\n关键评论："
     
     # 添加分隔线
     output += "\n--------------------------------------------------"

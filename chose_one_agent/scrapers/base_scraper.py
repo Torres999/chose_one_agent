@@ -314,7 +314,7 @@ class BaseScraper:
             date_selector = get_selector("post_date")
             content_selector = get_selector("post_content") or ".post-content, .telegraph-content-text, .text, .content, .telegraph-text, p"
             
-            logger.info(f"使用标题选择器: '{title_selector}', 时间选择器: '{date_selector}', 内容选择器: '{content_selector}'")
+            logger.debug(f"使用标题选择器: '{title_selector}', 时间选择器: '{date_selector}', 内容选择器: '{content_selector}'")
         except ImportError:
             logger.warning("无法导入 sections_config，将使用基本提取方法")
             title_selector = "strong"
