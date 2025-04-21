@@ -1,10 +1,10 @@
-# 财经网站分析智能体
+# 网站信息分析智能体
 
 这是一个自动化工具，用于抓取并分析财经网站BASE_URL的内容。
 
 ## 项目的主要功能和组件：
 根据项目需求，各目录的功能定位如下：
-- analyzers: 负责文本分析
+- analyzers: 负责文本情感分析
 - modules: 负责解析电报和评论
 - scrapers: 负责页面的导航、翻页等功能（导航、选择器）
 - utils: 工具类
@@ -28,14 +28,15 @@ python3 run.py --cutoff_date "2025-04-11 00:00" --sections "看盘" "公司" --s
 ```
 
 参数说明:
-- `--cutoff_date`: 指定截止日期时间，格式为"YYYY-MM-DD HH:MM"
+- `--cutoff_date`: 指定截止日期时间，格式为"YYYY-MM-DD HH:MM:SS"
 - `--sections`: 指定要运行的模块，可选值：
   - `看盘`: 只运行看盘板块
   - `公司`: 只运行公司板块
-- `--sentiment-analyzer`: 选择情感分析器，可选值：默认是0分/无评论，如果程序报错不用显示“分析失败”直接终止程序运行。评论的情感分析有0、1、2、3、4、5六档，0代表没有评论、1代表消极、5代表积极。
+- `--sentiment-analyzer`: 选择情感分析器，可选值：有评论是调用DS按【输出格式】输出。
   - `snownlp`: 使用本地SnowNLP进行情感分析（移除了）
   - `deepseek`: 使用DeepSeek API进行更准确的情感分析
 - `--deepseek-api-key`: DeepSeek API密钥，当使用deepseek分析器时必需
+
 
 ## 输出格式
 
