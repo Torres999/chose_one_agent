@@ -65,6 +65,13 @@ def parse_args():
         default=os.environ.get("DEEPSEEK_API_KEY", ""),
         help="DeepSeek API密钥"
     )
+    # 添加数据库相关参数
+    parser.add_argument(
+        "--use-db",
+        action="store_true",
+        default=True,
+        help="是否启用数据库存储功能"
+    )
     return parser.parse_args()
 
 def format_results(posts, args):
@@ -83,7 +90,7 @@ def format_results(posts, args):
 
     return output
 
-def run_telegraph_scraper(cutoff_date, sections, headless, sentiment_analyzer="none", deepseek_api_key=None, debug=False):
+def run_telegraph_scraper(cutoff_date, sections, headless, sentiment_analyzer="none", deepseek_api_key=None, debug=False, use_db=True):
     """
     运行电报爬虫
     
@@ -94,6 +101,7 @@ def run_telegraph_scraper(cutoff_date, sections, headless, sentiment_analyzer="n
         sentiment_analyzer: 情感分析器类型
         deepseek_api_key: DeepSeek API密钥
         debug: 是否启用调试模式
+        use_db: 是否启用数据库存储功能
         
     Returns:
         分析结果列表
@@ -122,7 +130,8 @@ def run_telegraph_scraper(cutoff_date, sections, headless, sentiment_analyzer="n
         scraper = BaseScraper(
             cutoff_date=cutoff_date, 
             headless=headless, 
-            debug=debug
+            debug=debug,
+            use_db=use_db  # 添加数据库功能开关
         )
         
         # 运行爬虫
@@ -209,8 +218,9 @@ def main():
             args.sections, 
             args.headless,
             args.sentiment_analyzer,
-            args.deepseek_api_key, 
-            args.debug
+            args.deepseek_api_key,
+            args.debug,
+            args.use_db  # 添加数据库功能开关
         )
         
         # 格式化并输出结果
@@ -221,6 +231,11 @@ def main():
         if args.debug:
             logger.info("分析完成，共处理了 {0} 条内容".format(len(results)))
         
+    except SystemExit as e:
+        # 处理由sys.exit()引起的异常，一般是由数据库连接失败触发的
+        logger.critical("程序被强制终止: 可能是数据库连接失败导致")
+        print("\n严重错误: 程序被强制终止，请检查数据库连接设置")
+        sys.exit(e.code)
     except Exception as e:
         log_error(logger, "运行过程中出错", e, args.debug)
         sys.exit(1)

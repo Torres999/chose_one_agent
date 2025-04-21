@@ -9,6 +9,7 @@ import re
 import time
 import random
 import traceback
+import sys
 from typing import List, Dict, Any, Optional
 from urllib.parse import quote, urlparse, urljoin
 
@@ -20,6 +21,12 @@ from chose_one_agent.utils.logging_utils import get_logger, log_error
 from chose_one_agent.utils.extraction import extract_post_content, clean_text
 from chose_one_agent.scrapers.base_navigator import BaseNavigator
 
+# 新增：导入数据库工具类
+try:
+    from chose_one_agent.utils.db_utils import MySQLManager
+except ImportError:
+    MySQLManager = None
+
 # 设置日志
 logger = get_logger(__name__)
 
@@ -28,7 +35,7 @@ class BaseScraper:
     基础爬虫类，供各功能模块继承使用
     """
     
-    def __init__(self, cutoff_date: datetime.datetime = None, headless: bool = True, debug: bool = False):
+    def __init__(self, cutoff_date: datetime.datetime = None, headless: bool = True, debug: bool = False, use_db: bool = True):
         """
         初始化爬虫基础类
         
@@ -36,6 +43,7 @@ class BaseScraper:
             cutoff_date: 截止日期，早于此日期的内容将被忽略
             headless: 是否使用无头模式运行浏览器
             debug: 是否启用调试模式
+            use_db: 是否启用数据库存储功能
         """
         self.cutoff_date = cutoff_date
         self.headless = headless
@@ -60,6 +68,21 @@ class BaseScraper:
         self._comment_extractor = None
         self.section = None
         
+        # 新增：数据库管理器属性
+        self.use_db = use_db and MySQLManager is not None
+        self.db_manager = None
+        
+        # 如果启用数据库功能，初始化数据库管理器
+        if self.use_db:
+            try:
+                self.db_manager = MySQLManager()
+                logger.info("数据库管理器初始化成功")
+            except Exception as e:
+                logger.error(f"初始化数据库管理器失败: {e}")
+                logger.error("数据库连接失败，程序将终止运行")
+                # 数据库连接失败，终止程序运行
+                sys.exit(1)
+        
     def __enter__(self):
         """
         上下文管理器入口，启动浏览器
@@ -72,6 +95,11 @@ class BaseScraper:
         上下文管理器出口，关闭浏览器
         """
         self.close_browser()
+        
+        # 新增：关闭数据库连接
+        if self.db_manager:
+            self.db_manager.close()
+            logger.info("数据库连接已关闭")
     
     def start_browser(self):
         """启动浏览器"""
@@ -1293,6 +1321,17 @@ class BaseScraper:
                 try:
                     logger.info(f"=== 开始爬取 '{section}' 板块 ===")
                     section_results = self._scrape_section(section)
+                    
+                    # 新增：将数据保存到数据库
+                    if self.use_db and self.db_manager and section_results:
+                        try:
+                            logger.info(f"正在将 {len(section_results)} 条 '{section}' 板块数据保存到数据库")
+                            saved_count = self.db_manager.save_posts(section_results, section)
+                            logger.info(f"成功保存 {saved_count}/{len(section_results)} 条数据到数据库")
+                        except Exception as db_error:
+                            logger.error(f"保存 '{section}' 板块数据到数据库时出错: {db_error}")
+                            # 出错时继续执行，不影响原有逻辑
+                    
                     results.extend(section_results)
                 except Exception as e:
                     log_error(logger, f"爬取'{section}'板块时出错", e, self.debug)
@@ -1310,6 +1349,11 @@ class BaseScraper:
         finally:
             # 确保关闭浏览器
             self.close_browser()
+            
+            # 新增：关闭数据库连接
+            if self.db_manager:
+                self.db_manager.close()
+                logger.info("数据库连接已关闭")
     
     def run(self) -> List[Dict[str, Any]]:
         """

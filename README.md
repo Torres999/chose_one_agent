@@ -36,6 +36,7 @@ python3 run.py --cutoff_date "2025-04-11 00:00" --sections "看盘" "公司" --s
   - `snownlp`: 使用本地SnowNLP进行情感分析（移除了）
   - `deepseek`: 使用DeepSeek API进行更准确的情感分析
 - `--deepseek-api-key`: DeepSeek API密钥，当使用deepseek分析器时必需
+- `--use-db`: 是否启用数据库存储功能
 
 
 ## 输出格式
