@@ -1,25 +1,25 @@
 """
 基础爬虫类，所有爬虫继承自此类
 """
+import os
 import datetime
-import json
 import logging
-import random
 import re
 import time
+import random
 import traceback
-from typing import Dict, Any, List, Tuple, Optional, Union, Callable
-from urllib.parse import urljoin
+from typing import List, Dict, Any, Optional
+from urllib.parse import quote, urlparse, urljoin
 
-from playwright.sync_api import sync_playwright, Page, Browser, Response
+from playwright.sync_api import sync_playwright, Browser, Page, TimeoutError as PlaywrightTimeoutError, ElementHandle
 
-from chose_one_agent.utils.config import BASE_URL
-from chose_one_agent.utils.constants import SCRAPER_CONSTANTS, BASE_URLS, SENTIMENT_SCORE_LABELS
+from chose_one_agent.utils.datetime_utils import convert_relative_time, get_current_datetime, is_before_cutoff, parse_datetime
+from chose_one_agent.utils.constants import SCRAPER_CONSTANTS, BASE_URLS
 from chose_one_agent.utils.logging_utils import get_logger, log_error
-from chose_one_agent.utils.datetime_utils import is_before_cutoff, parse_datetime
+from chose_one_agent.utils.extraction import extract_post_content, clean_text
 from chose_one_agent.scrapers.base_navigator import BaseNavigator
 
-# 获取日志记录器
+# 设置日志
 logger = get_logger(__name__)
 
 class BaseScraper:
@@ -27,36 +27,39 @@ class BaseScraper:
     基础爬虫类，供各功能模块继承使用
     """
     
-    def __init__(self, cutoff_date: datetime.datetime = None, headless: bool = True, debug: bool = False,
-                 sentiment_analyzer_type: str = "snownlp", deepseek_api_key: str = None):
+    def __init__(self, cutoff_date: datetime.datetime = None, headless: bool = True, debug: bool = False):
         """
-        初始化爬虫
+        初始化爬虫基础类
         
         Args:
             cutoff_date: 截止日期，早于此日期的内容将被忽略
             headless: 是否使用无头模式运行浏览器
             debug: 是否启用调试模式
-            sentiment_analyzer_type: 情感分析器类型，默认为'snownlp'
-            deepseek_api_key: DeepSeek API密钥（如果使用DeepSeek分析器）
         """
         self.cutoff_date = cutoff_date
         self.headless = headless
         self.debug = debug
+        self.base_url = BASE_URLS["main"]
+        
+        # 初始化浏览器相关属性
+        self.playwright = None
         self.browser = None
         self.page = None
-        self.context = None
-        self.base_url = BASE_URL
-        self.results = []
-        self.navigator = None
-        self.playwright = None
-        self.max_retries = 3
-        self.sentiment_analyzer_type = sentiment_analyzer_type
-        self.deepseek_api_key = deepseek_api_key
+        
+        # 初始化分析器
+        self._post_analyzer = None
+        
+        # 记录断开连接状态
+        self.is_connected = False
+        
+        # 截取屏幕截图的序号
+        self.screenshot_count = 0
+        
+        # 初始化日志
+        self.logger = logger
         
         # 以下组件将在需要时初始化
         self._comment_extractor = None
-        self._post_analyzer = None
-        self._sentiment_analyzer = None
         self._keyword_analyzer = None
         self.section = None
         
@@ -335,12 +338,14 @@ class BaseScraper:
             
             title_selector = get_selector("post_title")
             date_selector = get_selector("post_date")
+            content_selector = get_selector("post_content") or ".post-content, .telegraph-content-text, .text, .content, .telegraph-text, p"
             
-            logger.info(f"使用标题选择器: '{title_selector}', 时间选择器: '{date_selector}'")
+            logger.info(f"使用标题选择器: '{title_selector}', 时间选择器: '{date_selector}', 内容选择器: '{content_selector}'")
         except ImportError:
             logger.warning("无法导入 sections_config，将使用基本提取方法")
             title_selector = "strong"
             date_selector = ".f-l.l-h-13636.f-w-b.c-de0422.telegraph-time-box, .telegraph-time-box"
+            content_selector = ".post-content, .telegraph-content-text, .text, .content, .telegraph-text, p"
         
         result = {
             "title": "未知标题",
@@ -367,6 +372,35 @@ class BaseScraper:
                 logger.info(f"提取到标题: {truncated_title}")
             else:
                 logger.warning(f"未找到标题元素，选择器: '{title_selector}'")
+                
+                # 如果未找到标题，尝试从正文中提取前20个字符作为标题
+                content_el = post_element.query_selector(content_selector)
+                if content_el:
+                    content_text = content_el.inner_text().strip()
+                    if content_text:
+                        # 提取前20个字符，如果有限制的话
+                        content_title = content_text[:20] + "..." if len(content_text) > 20 else content_text
+                        result["title"] = content_title
+                        logger.info(f"从正文提取标题: {content_title}")
+                        
+                        # 存储完整内容，用于后续处理
+                        result["content"] = content_text
+                else:
+                    # 如果也未找到内容元素，尝试直接从帖子元素提取文本
+                    full_text = post_element.inner_text().strip()
+                    if full_text:
+                        # 清理文本，移除可能的日期和时间信息
+                        clean_text = re.sub(r'\d{2}:\d{2}(:\d{2})?', '', full_text)
+                        clean_text = re.sub(r'\d{4}[.-]\d{2}[.-]\d{2}', '', clean_text).strip()
+                        
+                        if clean_text:
+                            # 提取前20个字符作为标题
+                            content_title = clean_text[:20] + "..." if len(clean_text) > 20 else clean_text
+                            result["title"] = content_title
+                            logger.info(f"从帖子文本提取标题: {content_title}")
+                            
+                            # 存储完整内容
+                            result["content"] = clean_text
             
             # 提取日期和时间
             try:
@@ -1803,3 +1837,83 @@ class BaseScraper:
         except Exception as e:
             logger.error(f"检查帖子日期有效性时出错: {str(e)}")
             return True  # 如果出错，默认为有效 
+
+    def _init_analyzers(self):
+        """
+        初始化需要的各种分析器实例
+        """
+        if self._post_analyzer is not None:
+            return
+            
+        try:
+            from chose_one_agent.modules.telegraph_analyzer import TelegraphAnalyzer
+            
+            self._post_analyzer = TelegraphAnalyzer(
+                debug=self.debug
+            )
+            
+            if self.debug:
+                logger.info("成功初始化帖子分析器")
+                
+        except ImportError as e:
+            logger.warning(f"无法加载分析器模块: {e}")
+            self._post_analyzer = None
+
+    def analyze_post_data(self, post_result: Dict[str, Any], comments: List[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        分析帖子数据
+        
+        Args:
+            post_result: 帖子数据
+            comments: 评论数据
+            
+        Returns:
+            分析结果的字典
+        """
+        # 基础结构
+        result = {
+            "insight": ""
+        }
+        
+        # 记录评论数量
+        comment_count = len(comments) if comments else 0
+        
+        post_result["has_comments"] = comment_count > 0
+        post_result["comments"] = comments or []
+        
+        return result
+
+    def _process_post_result(self, post_result: Dict[str, Any], is_expired: bool = False) -> Dict[str, Any]:
+        """
+        处理帖子结果，添加评论
+        
+        Args:
+            post_result: 帖子数据
+            is_expired: 是否已过期
+            
+        Returns:
+            处理后的帖子数据
+        """
+        # 如果已过期，则设置为过期
+        if is_expired:
+            post_result["has_comments"] = False
+            post_result["comments"] = []
+            
+            if self.debug:
+                self.logger.info(f"帖子已过期，标题：{post_result.get('title', '未知')}")
+            
+            return post_result
+        
+        # 获取评论（如果可能）
+        comments = self._extract_comments(post_result)
+        post_result["has_comments"] = len(comments) > 0
+        post_result["comments"] = comments
+        
+        # 如果有评论，添加到帖子中
+        if comments and self._post_analyzer is not None:
+            sentiment_analysis = self.analyze_post_data(post_result, comments)
+            post_result["sentiment_analysis"] = sentiment_analysis.get("insight", "")
+        else:
+            post_result["sentiment_analysis"] = ""
+        
+        return post_result

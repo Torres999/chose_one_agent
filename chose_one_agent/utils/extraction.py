@@ -6,7 +6,6 @@ import logging
 from typing import Dict, Any, Optional, Union, List
 
 from chose_one_agent.utils.logging_utils import get_logger
-from chose_one_agent.utils.constants import SENTIMENT_SCORE_LABELS
 
 # 获取日志记录器
 logger = get_logger(__name__)
@@ -20,52 +19,15 @@ def format_output(title: str, date: str, time: str, sentiment: Optional[Union[st
         title: 电报标题
         date: 电报日期
         time: 电报时间
-        sentiment: 评论情绪（可选），可以是字符串、0-5的数字评分或包含情感分析信息的字典
+        sentiment: 参数保留但不再使用
         section: 所属板块（可选）
-        deepseek_analysis: Deepseek情感分析的详细结果（可选）
+        deepseek_analysis: 参数保留但不再使用
         
     Returns:
         格式化的输出字符串
     """
     output = f"标题：{title}\n日期：{date}\n时间：{time}"
-    
-    # 处理情感分析结果
-    if isinstance(sentiment, dict):
-        sentiment_label = sentiment.get("sentiment_label", "无评论")
-        has_comments = sentiment.get("has_comments", False)
-        comments = sentiment.get("comments", [])
-        sentiment_analysis = sentiment.get("sentiment_analysis", "")
-        
-        output += f"\n评论情绪：{sentiment_label}"
-        output += f"\n所属板块：{section}"
-        
-        # 只有在有评论且有情感分析结果时，才添加详细分析
-        if has_comments and comments and sentiment_analysis and sentiment_label not in ["无评论", "分析失败"]:
-            # 格式化情感分析结果
-            for pattern in ["整体评论情感", "情感评分", "情感分布", "关键词", "市场情绪"]:
-                sentiment_analysis = sentiment_analysis.replace(f"- {pattern}:", f"\n- {pattern}:")
-                
-            # 移除开头可能的多余换行
-            sentiment_analysis = sentiment_analysis.lstrip("\n")
-            output += f"\n\n{sentiment_analysis}"
-    elif isinstance(sentiment, (int, float)):
-        # 评分作为整数，转换为情感描述
-        # 确保sentiment是整数
-        sentiment_int = round(sentiment)
-        # 确保在有效范围内
-        sentiment_int = max(0, min(sentiment_int, 5))
-        output += f"\n评论情绪：{SENTIMENT_SCORE_LABELS.get(sentiment_int, '无评论')}"
-        output += f"\n所属板块：{section}"
-    else:
-        # 处理旧格式的字符串情感
-        output += f"\n评论情绪：{sentiment or '无评论'}"
-        output += f"\n所属板块：{section}"
-    
-    # 如果有DeepSeek的分析结果
-    if deepseek_analysis:
-        sentiment_label = deepseek_analysis.get("label", "无评论")
-        sentiment_score = deepseek_analysis.get("score", 0)
-        output += f"\n\nDeepSeek情感分析：{sentiment_label} (得分: {sentiment_score}/5)"
+    output += f"\n所属板块：{section}"
     
     return output
 

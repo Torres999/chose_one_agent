@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-电报评论提取工具，用于获取和分析电报评论
+评论提取器模块，用于从网页中提取评论信息
 """
 import re
 import time
@@ -9,13 +9,14 @@ import logging
 import traceback
 from typing import List, Dict, Any, Optional, Union
 from urllib.parse import urljoin
+from datetime import datetime
 
 from playwright.sync_api import ElementHandle, Page
 from bs4 import BeautifulSoup
 
-from chose_one_agent.analyzers.sentiment_analyzer import SentimentAnalyzer
 from chose_one_agent.utils.logging_utils import get_logger, log_error
 from chose_one_agent.utils.config import BASE_URL
+from chose_one_agent.utils.extraction import clean_text
 
 # 获取日志记录器
 logger = get_logger(__name__)
@@ -35,20 +36,18 @@ TIME_REGEX = re.compile(r'(\d{2}:\d{2}(?::\d{2})?)')
 NUMBER_REGEX = re.compile(r'(\d+)')
 
 class CommentExtractor:
-    """电报评论提取工具，负责从帖子中获取评论并进行分析"""
+    """评论提取器类，负责从网页中提取评论信息"""
     
-    def __init__(self, page: Optional[Page] = None, debug: bool = False, analyzer: Optional[Any] = None):
+    def __init__(self, page: Optional[Page] = None, debug: bool = False):
         """
         初始化评论提取工具
         
         Args:
             page: Playwright页面对象
             debug: 是否启用调试模式
-            analyzer: 分析器实例（可选，使用依赖注入模式）
         """
         self.page = page
         self.debug = debug
-        self.analyzer = analyzer
     
     def set_page(self, page: Page):
         """
@@ -58,15 +57,6 @@ class CommentExtractor:
             page: Playwright页面对象
         """
         self.page = page
-    
-    def set_analyzer(self, analyzer):
-        """
-        设置分析器
-        
-        Args:
-            analyzer: 分析器实例
-        """
-        self.analyzer = analyzer
     
     def extract_comments(self, post_url: str, max_comments: int = 50) -> List[str]:
         """
@@ -307,21 +297,10 @@ class CommentExtractor:
             comments: 评论列表
             
         Returns:
-            情感分析结果
+            分析结果
         """
-        if not comments:
-            return {"success": False, "message": "无评论"}
-        
-        # 提取评论文本
-        comment_texts = self.get_comments_text(comments)
-        
-        # 使用注入的分析器或创建新的
-        analyzer = self.analyzer
-        if not analyzer:
-            analyzer = SentimentAnalyzer()
-        
-        # 使用分析器进行分析
-        return analyzer.analyze(" ".join(comment_texts))
+        # 返回空分析结果
+        return {"insight": ""}
     
     def extract_info_from_html(self, html_content: str) -> List[Dict[str, Any]]:
         """从HTML内容中提取评论信息

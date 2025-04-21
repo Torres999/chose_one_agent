@@ -1,5 +1,4 @@
 playwright==1.40.0
-snownlp==0.12.3
 pandas==2.1.1
 datetime==5.2
 python-dotenv==1.0.0

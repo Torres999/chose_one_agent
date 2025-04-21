@@ -248,7 +248,102 @@ def get_current_date_time() -> Tuple[str, str]:
     获取当前日期和时间
     
     Returns:
-        (日期字符串，时间字符串)的元组
+        (日期字符串, 时间字符串)的元组
     """
     now = datetime.datetime.now()
-    return format_date(now), format_time(now) 
+    date_str = format_date(now)
+    time_str = format_time(now)
+    return date_str, time_str
+
+def convert_relative_time(time_text: str) -> datetime.datetime:
+    """
+    将相对时间文本（如"3分钟前"，"昨天"）转换为datetime对象
+    
+    Args:
+        time_text: 相对时间文本
+        
+    Returns:
+        datetime对象
+    """
+    now = datetime.datetime.now()
+    
+    if not time_text or time_text.strip() == "":
+        return now
+    
+    time_text = time_text.strip()
+    
+    # 刚刚
+    if time_text == "刚刚" or time_text == "刚才":
+        return now
+    
+    # x分钟前
+    match = re.search(r'(\d+)\s*分钟前', time_text)
+    if match:
+        minutes = int(match.group(1))
+        return now - datetime.timedelta(minutes=minutes)
+    
+    # x小时前
+    match = re.search(r'(\d+)\s*小时前', time_text)
+    if match:
+        hours = int(match.group(1))
+        return now - datetime.timedelta(hours=hours)
+    
+    # 今天
+    if time_text.startswith("今天"):
+        time_part = re.search(r'(\d{1,2}:\d{1,2})', time_text)
+        if time_part:
+            time_str = time_part.group(1)
+            hour, minute = map(int, time_str.split(':'))
+            return datetime.datetime(now.year, now.month, now.day, hour, minute)
+        return datetime.datetime(now.year, now.month, now.day)
+    
+    # 昨天
+    if time_text.startswith("昨天"):
+        yesterday = now - datetime.timedelta(days=1)
+        time_part = re.search(r'(\d{1,2}:\d{1,2})', time_text)
+        if time_part:
+            time_str = time_part.group(1)
+            hour, minute = map(int, time_str.split(':'))
+            return datetime.datetime(yesterday.year, yesterday.month, yesterday.day, hour, minute)
+        return datetime.datetime(yesterday.year, yesterday.month, yesterday.day)
+    
+    # 前天
+    if time_text.startswith("前天"):
+        day_before_yesterday = now - datetime.timedelta(days=2)
+        time_part = re.search(r'(\d{1,2}:\d{1,2})', time_text)
+        if time_part:
+            time_str = time_part.group(1)
+            hour, minute = map(int, time_str.split(':'))
+            return datetime.datetime(day_before_yesterday.year, day_before_yesterday.month, day_before_yesterday.day, hour, minute)
+        return datetime.datetime(day_before_yesterday.year, day_before_yesterday.month, day_before_yesterday.day)
+    
+    # 尝试直接解析日期时间
+    try:
+        # 尝试解析标准格式
+        formats = [
+            DATETIME_FORMATS["standard"],
+            DATETIME_FORMATS["standard_with_seconds"],
+            DATETIME_FORMATS["date_only"] + " " + DATETIME_FORMATS["time_only"],
+            DATETIME_FORMATS["dot_date"] + " " + DATETIME_FORMATS["time_only"]
+        ]
+        
+        for fmt in formats:
+            try:
+                return datetime.datetime.strptime(time_text, fmt)
+            except ValueError:
+                continue
+    except Exception:
+        pass
+    
+    # 如果无法解析，返回当前时间
+    logger.warning(f"无法解析时间文本: {time_text}，使用当前时间")
+    return now
+
+def get_current_datetime() -> datetime.datetime:
+    """
+    获取当前的datetime对象
+    
+    Returns:
+        当前的datetime对象
+    """
+    return datetime.datetime.now() 
