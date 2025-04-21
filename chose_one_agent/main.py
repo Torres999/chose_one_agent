@@ -3,7 +3,6 @@ import argparse
 import datetime
 import sys
 import os
-from typing import List, Dict, Any
 
 from chose_one_agent.scrapers.base_scraper import BaseScraper
 from chose_one_agent.utils.extraction import format_output
@@ -54,33 +53,31 @@ def parse_args():
     )
     return parser.parse_args()
 
-def format_results(results: List[Dict[str, Any]]) -> str:
-    """
-    格式化结果输出
-    
-    Args:
-        results: 分析结果列表
+def format_results(posts, args):
+    """格式化结果输出"""
+    output = []
+    for title, date, time, sect, _, sentiment_analysis, text in posts:
+        # 构建情感信息字典，包含评论数量
+        comment_count = 0
+        if sentiment_analysis and isinstance(sentiment_analysis, dict):
+            comment_count = sentiment_analysis.get("total_comments", 0)
         
-    Returns:
-        格式化的输出字符串
-    """
-    if not results:
-        return "未找到符合条件的内容"
-    
-    output_parts = []
-    for result in results:
-        title = result.get("title", "无标题")
-        date = result.get("date", "")
-        time = result.get("time", "")
-        section = result.get("section", "未知板块")
-        
-        formatted = format_output(title, date, time, None, section, None)
-        output_parts.append(formatted)
-        output_parts.append("-" * 50)
-    
-    return "\n".join(output_parts)
+        sentiment_info = {
+            "comment_count": comment_count
+        }
+            
+        output.append(format_output(
+            title=title,
+            date=date,
+            time=time,
+            section=sect,
+            sentiment=sentiment_info,
+            deepseek_analysis=None,
+        ))
 
-def run_telegraph_scraper(cutoff_date: datetime.datetime, sections: List[str], headless: bool, debug: bool = False) -> List[Dict[str, Any]]:
+    return output
+
+def run_telegraph_scraper(cutoff_date, sections, headless, debug=False):
     """
     运行电报爬虫
     
@@ -100,7 +97,7 @@ def run_telegraph_scraper(cutoff_date: datetime.datetime, sections: List[str], h
     if not processed_sections:
         processed_sections = SCRAPER_CONFIG["default_sections"]
         
-    logger.info(f"开始爬取电报，截止日期: {cutoff_date}, 子板块: {processed_sections}")
+    logger.info("开始爬取电报，截止日期: {0}, 子板块: {1}".format(cutoff_date, processed_sections))
     
     try:
         # 创建爬虫实例
@@ -111,11 +108,31 @@ def run_telegraph_scraper(cutoff_date: datetime.datetime, sections: List[str], h
         )
         
         # 运行爬虫
-        results = scraper.run_telegraph_scraper(processed_sections)
+        raw_results = scraper.run_telegraph_scraper(processed_sections)
+        
+        # 转换为format_results预期的格式
+        results = []
+        for post in raw_results:
+            # 构建包含total_comments字段的结构
+            sentiment_analysis = {
+                "total_comments": post.get("comment_count", 0)
+            }
+            
+            # 创建7元素元组: (标题,日期,时间,板块,_,情感分析,内容)
+            result_tuple = (
+                post.get("title", ""),
+                post.get("date", ""),
+                post.get("time", ""),
+                post.get("section", ""),
+                None,  # 占位符
+                sentiment_analysis,
+                post.get("content", "")
+            )
+            results.append(result_tuple)
         
         # 仅在调试模式下显示详细日志
         if debug:
-            logger.info(f"电报爬取完成，共处理了 {len(results)} 条电报")
+            logger.info("电报爬取完成，共处理了 {0} 条电报".format(len(results)))
         return results
     except Exception as e:
         log_error(logger, "运行电报爬虫时出错", e, debug)
@@ -132,16 +149,16 @@ def main():
         # 解析截止日期，如果解析失败会抛出异常
         cutoff_date = parse_cutoff_date(args.cutoff_date)
     except ValueError as e:
-        logger.error(f"截止日期解析失败: {e}")
-        print(f"\n错误: {e}")
+        logger.error("截止日期解析失败: {0}".format(e))
+        print("\n错误: {0}".format(e))
         sys.exit(1)
         
     # 如果是调试模式，显示所有参数
     if args.debug:
-        logger.debug(f"命令行参数: {args}")
-        logger.debug(f"截止日期: {cutoff_date}")
+        logger.debug("命令行参数: {0}".format(args))
+        logger.debug("截止日期: {0}".format(cutoff_date))
     
-    logger.info(f"开始运行ChoseOne财经网站分析智能体")
+    logger.info("开始运行ChoseOne财经网站分析智能体")
     
     try:
         # 爬取电报内容
@@ -153,12 +170,12 @@ def main():
         )
         
         # 格式化并输出结果
-        formatted_output = format_results(results)
-        print("\n" + formatted_output)
+        formatted_output = format_results(results, args)
+        print("\n" + "\n".join(formatted_output))
         
         # 仅在调试模式下显示总结日志
         if args.debug:
-            logger.info(f"分析完成，共处理了 {len(results)} 条内容")
+            logger.info("分析完成，共处理了 {0} 条内容".format(len(results)))
         
     except Exception as e:
         log_error(logger, "运行过程中出错", e, args.debug)

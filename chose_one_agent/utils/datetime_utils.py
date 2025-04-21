@@ -29,7 +29,7 @@ def parse_datetime(date_str: str, time_str: str) -> datetime.datetime:
         
         # 预处理日期格式
         if len(date_str.split('-')) == 2:  # 只有月份和日期 (如 "05-20")
-            date_str = f"{datetime.datetime.now().year}-{date_str}"
+            date_str = "{0}-{1}".format(datetime.datetime.now().year, date_str)
         elif re.match(r'^\d{4}\.\d{2}\.\d{2}$', date_str):  # YYYY.MM.DD格式
             date_str = date_str.replace('.', '-')
         
@@ -39,14 +39,14 @@ def parse_datetime(date_str: str, time_str: str) -> datetime.datetime:
             if time_match:
                 time_str = time_match.group(1)
             else:
-                raise ValueError(f"无法从'{time_str}'中提取时间")
+                raise ValueError("无法从'{0}'中提取时间".format(time_str))
         
         # 处理只有小时没有分钟的情况
         if re.match(r'^\d+$', time_str):
-            time_str = f"{time_str}:00"
+            time_str = "{0}:00".format(time_str)
         
         # 合并日期和时间
-        datetime_str = f"{date_str} {time_str}"
+        datetime_str = "{0} {1}".format(date_str, time_str)
         
         # 尝试解析各种格式
         formats = [
@@ -64,11 +64,11 @@ def parse_datetime(date_str: str, time_str: str) -> datetime.datetime:
             except ValueError:
                 continue
         
-        raise ValueError(f"无法解析日期时间: '{datetime_str}'")
+        raise ValueError("无法解析日期时间: '{0}'".format(datetime_str))
     
     except Exception as e:
-        logger.error(f"日期时间解析错误: {e}")
-        raise ValueError(f"日期时间解析错误: {e}")
+        logger.error("日期时间解析错误: {0}".format(e))
+        raise ValueError("日期时间解析错误: {0}".format(e))
 
 def extract_date_time(date_time_text: str) -> Tuple[str, str]:
     """
@@ -119,7 +119,7 @@ def extract_date_time(date_time_text: str) -> Tuple[str, str]:
         return "", ""
             
     except Exception as e:
-        logger.error(f"提取日期时间错误: {e}")
+        logger.error("提取日期时间错误: {0}".format(e))
         return "", ""
 
 def parse_cutoff_date(cutoff_date_str: Optional[str] = None) -> datetime.datetime:
@@ -151,7 +151,7 @@ def parse_cutoff_date(cutoff_date_str: Optional[str] = None) -> datetime.datetim
             continue
     
     # 如果所有格式都失败，抛出异常
-    raise ValueError(f"无效的截止日期格式: {cutoff_date_str}，应为'YYYY-MM-DD HH:MM'或'YYYY-MM-DD HH:MM:SS'")
+    raise ValueError("无效的截止日期格式: {0}，应为'YYYY-MM-DD HH:MM'或'YYYY-MM-DD HH:MM:SS'".format(cutoff_date_str))
 
 def is_before_cutoff(post_date: datetime.datetime, cutoff_date: datetime.datetime) -> bool:
     """
@@ -210,7 +210,7 @@ def is_time_after_cutoff(post_time: str, cutoff_time: str) -> bool:
         return True  # 时间相等
         
     except Exception as e:
-        logger.error(f"时间比较出错: {e}")
+        logger.error("时间比较出错: {0}".format(e))
         return True  # 出错时默认接受帖子
 
 def format_date(dt: datetime.datetime, format_str: str = None) -> str:

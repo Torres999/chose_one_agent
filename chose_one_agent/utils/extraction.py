@@ -19,15 +19,30 @@ def format_output(title: str, date: str, time: str, sentiment: Optional[Union[st
         title: 电报标题
         date: 电报日期
         time: 电报时间
-        sentiment: 参数保留但不再使用
+        sentiment: 情感信息，包括评论数量
         section: 所属板块（可选）
         deepseek_analysis: 参数保留但不再使用
         
     Returns:
         格式化的输出字符串
     """
-    output = f"标题：{title}\n日期：{date}\n时间：{time}"
-    output += f"\n所属板块：{section}"
+    output = "标题：{0}\n日期：{1}\n时间：{2}".format(title, date, time)
+    output += "\n所属板块：{0}".format(section)
+    
+    # 显示评论数量字段
+    comment_count = 0
+    if isinstance(sentiment, dict):
+        comment_count = sentiment.get("comment_count", 0)
+    
+    output += "\n评论数量：{0}".format(comment_count)
+    
+    # 添加新字段，不设置默认值
+    output += "\n评论情绪："
+    output += "\n情感分布："
+    output += "\n关键评论："
+    
+    # 添加分隔线
+    output += "\n--------------------------------------------------"
     
     return output
 
@@ -46,28 +61,6 @@ def extract_post_content(html_content: str) -> str:
     # 移除多余空白
     content = re.sub(r'\s+', ' ', content).strip()
     return content
-
-def extract_financial_terms(text: str, terms_set: set) -> List[str]:
-    """
-    从文本中提取财经术语
-    
-    Args:
-        text: 要分析的文本
-        terms_set: 财经术语集合
-        
-    Returns:
-        提取到的财经术语列表
-    """
-    if not text or not terms_set:
-        return []
-    
-    try:
-        # 简单匹配每个术语是否出现在文本中
-        found_terms = [term for term in terms_set if term in text]
-        return found_terms
-    except Exception as e:
-        logger.error(f"提取财经术语出错: {e}")
-        return []
 
 def clean_text(text: str) -> str:
     """
@@ -89,4 +82,23 @@ def clean_text(text: str) -> str:
     # 移除连续空白
     text = re.sub(r'\s+', ' ', text)
     # 移除首尾空白
-    return text.strip() 
+    return text.strip()
+
+def analyze_post_content(post_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    分析帖子内容，提取基础信息
+    
+    Args:
+        post_data: 帖子数据，包含标题和内容
+        
+    Returns:
+        分析结果字典
+    """
+    date = post_data.get("date", "")
+    time = post_data.get("time", "")
+    
+    # 返回基础信息
+    return {
+        "post_date": date,
+        "post_time": time
+    } 

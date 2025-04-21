@@ -4,9 +4,15 @@
 import logging
 import sys
 import os
-from typing import Optional, Dict, Any
+import traceback
+import functools
+from typing import Optional, Dict, Any, Callable
 
 from chose_one_agent.utils.config import LOG_CONFIG
+
+# 设置基本日志格式
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 
 def setup_logging(
     name: str = "chose_one_agent", 
@@ -48,11 +54,22 @@ def setup_logging(
     console_handler.setLevel(numeric_level)
     
     # 创建格式化器
-    formatter = logging.Formatter(log_format)
+    formatter = logging.Formatter(log_format, DATE_FORMAT)
     console_handler.setFormatter(formatter)
     
     # 添加处理器
     logger.addHandler(console_handler)
+    
+    # 如果提供了日志文件路径，添加文件处理器
+    if log_file:
+        # 确保日志目录存在
+        log_dir = os.path.dirname(log_file)
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir)
+            
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
     
     # 设置是否传播
     logger.propagate = propagate
@@ -82,12 +99,12 @@ def log_function_call(logger: logging.Logger):
     """装饰器: 记录函数调用信息"""
     def decorator(func):
         def wrapper(*args, **kwargs):
-            logger.debug(f"调用 {func.__name__}({args}, {kwargs})")
+            logger.debug("调用 {0}({1}, {2})".format(func.__name__, args, kwargs))
             try:
                 result = func(*args, **kwargs)
                 return result
             except Exception as e:
-                logger.error(f"{func.__name__} 出错: {e}", exc_info=True)
+                logger.error("{0} 出错: {1}".format(func.__name__, e), exc_info=True)
                 raise
         return wrapper
     return decorator
@@ -102,7 +119,7 @@ def log_error(logger: logging.Logger, message: str, error: Exception, debug: boo
         error: 异常对象
         debug: 是否记录堆栈信息
     """
-    logger.error(f"{message}: {error}")
     if debug:
-        import traceback
-        logger.error(traceback.format_exc()) 
+        logger.error("{0}: {1}".format(message, error), exc_info=True)
+    else:
+        logger.error("{0}: {1}".format(message, error)) 

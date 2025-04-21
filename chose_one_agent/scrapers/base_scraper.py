@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 基础爬虫类，所有爬虫继承自此类
 """
@@ -46,9 +47,6 @@ class BaseScraper:
         self.browser = None
         self.page = None
         
-        # 初始化分析器
-        self._post_analyzer = None
-        
         # 记录断开连接状态
         self.is_connected = False
         
@@ -60,7 +58,6 @@ class BaseScraper:
         
         # 以下组件将在需要时初始化
         self._comment_extractor = None
-        self._keyword_analyzer = None
         self.section = None
         
     def __enter__(self):
@@ -121,34 +118,14 @@ class BaseScraper:
         # 导入需要的组件
         try:
             from chose_one_agent.modules.comment_extractor import CommentExtractor
-            from chose_one_agent.analyzers.sentiment_analyzer import SentimentAnalyzer
-            from chose_one_agent.modules.telegraph_analyzer import TelegraphAnalyzer
             
-            # 创建分析器实例
-            self._post_analyzer = TelegraphAnalyzer(
-                sentiment_analyzer_type=self.sentiment_analyzer_type,
-                deepseek_api_key=self.deepseek_api_key,
-                debug=self.debug
-            )
-            
-            # 创建评论提取器实例并注入分析器
-            self._comment_extractor = CommentExtractor(self.page, self.debug, self._post_analyzer)
-            
-            # 保留这些实例以便向后兼容
-            self._sentiment_analyzer = SentimentAnalyzer(
-                self.sentiment_analyzer_type, self.deepseek_api_key
-            )
-            
-            # 不再尝试导入KeywordAnalyzer
-            self._keyword_analyzer = None
+            # 创建评论提取器实例
+            self._comment_extractor = CommentExtractor(self.page, self.debug)
             
         except ImportError as e:
             # 这些组件可能不是所有爬虫都需要的，记录日志但不终止程序
-            logger.warning(f"初始化高级组件时出错: {e}")
-            self._post_analyzer = None
+            logger.warning(f"初始化组件时出错: {e}")
             self._comment_extractor = None
-            self._sentiment_analyzer = None
-            self._keyword_analyzer = None
     
     def close_browser(self):
         """关闭浏览器及相关资源"""
@@ -167,9 +144,6 @@ class BaseScraper:
             
             # 重置组件
             self._comment_extractor = None
-            self._post_analyzer = None
-            self._sentiment_analyzer = None
-            self._keyword_analyzer = None
         except Exception as e:
             log_error(logger, "关闭浏览器时出错", e, self.debug)
     
@@ -519,7 +493,7 @@ class BaseScraper:
                         }""")
                         
                         if parent_el_obj:
-                            logger.info("找到父级容器telegraph-content-box")
+                            logger.debug("找到父级容器telegraph-content-box")
                             
                             # 将JavaScript对象转换为ElementHandle对象
                             parent_el = None
@@ -749,7 +723,7 @@ class BaseScraper:
                 try:
                     container = new_page.query_selector(selector)
                     if container:
-                        logger.info(f"找到评论容器: '{selector}'")
+                        logger.debug(f"找到评论容器: '{selector}'")
                         comment_container = container
                         break
                 except Exception as e:
@@ -1106,136 +1080,6 @@ class BaseScraper:
             if not comments:
                 logger.warning("未能从详情页提取到任何评论内容")
             
-            # ===================== 情感分析 =====================
-            # 在返回之前，如果有评论且分析器可用，进行情感分析
-            if comments and self._post_analyzer:
-                logger.info(f"对提取到的 {len(comments)} 条评论进行情感分析")
-                
-                # 提取评论内容文本
-                comment_texts = [comment["content"] for comment in comments]
-                
-                # 估计评论文本总长度，用于决定是否需要批量处理
-                total_text_length = sum(len(text) for text in comment_texts)
-                max_length_per_request = 4000  # 假设API每次请求的最大长度限制
-                
-                # 情感分析结果
-                overall_score = 0  # 默认无评论
-                sentiment_label = "无评论"
-                comment_scores = {}
-                
-                if total_text_length <= max_length_per_request:
-                    # 评论总长度在限制内，一次性处理所有评论
-                    logger.info("评论总长度在限制内，进行一次性情感分析")
-                    
-                    # 构建简单的帖子数据结构供分析器使用
-                    temp_post = {
-                        "title": "详情页评论",
-                        "url": post_url,
-                        "content": "\n".join(comment_texts)  # 合并所有评论文本作为内容
-                    }
-                    
-                    # 分析评论情感 - 传递文本而非字典对象
-                    sentiment_results = self._post_analyzer.analyze_post_data(temp_post, comment_texts)
-                    
-                    # 获取分析结果
-                    overall_score = sentiment_results.get('sentiment_score', 0)
-                    sentiment_label = sentiment_results.get('sentiment_label', '无评论')
-                    comment_scores = sentiment_results.get("comment_scores", {})
-                else:
-                    # 评论总长度超出限制，需要分批处理
-                    logger.info(f"评论总长度({total_text_length})超出限制({max_length_per_request})，进行分批情感分析")
-                    
-                    # 将评论分成多个批次
-                    batches = []
-                    current_batch = []
-                    current_length = 0
-                    
-                    for i, text in enumerate(comment_texts):
-                        text_length = len(text)
-                        
-                        # 检查当前评论是否过长
-                        if text_length > max_length_per_request:
-                            logger.warning(f"评论 #{i+1} 过长 ({text_length} 字符)，将被截断")
-                            # 截断单条评论
-                            text = text[:max_length_per_request-100]  # 留出一些余量
-                            text_length = len(text)
-                        
-                        # 检查添加当前评论是否会超出批次限制
-                        if current_length + text_length > max_length_per_request:
-                            # 当前批次已满，保存并创建新批次
-                            if current_batch:
-                                batches.append(current_batch)
-                            current_batch = [text]
-                            current_length = text_length
-                        else:
-                            # 添加到当前批次
-                            current_batch.append(text)
-                            current_length += text_length
-                    
-                    # 添加最后一个批次
-                    if current_batch:
-                        batches.append(current_batch)
-                    
-                    # 处理每个批次
-                    batch_scores = []
-                    total_weight = 0
-                    
-                    for i, batch in enumerate(batches):
-                        logger.info(f"处理评论批次 {i+1}/{len(batches)}，包含 {len(batch)} 条评论")
-                        
-                        # 为每个批次创建临时帖子
-                        batch_post = {
-                            "title": f"详情页评论批次 {i+1}",
-                            "url": post_url,
-                            "content": "\n".join(batch)
-                        }
-                        
-                        # 分析当前批次
-                        batch_result = self._post_analyzer.analyze_post_data(batch_post, batch)
-                        batch_score = batch_result.get('sentiment_score', 0)
-                        
-                        # 如果返回的是情感分析结果对象，则提取compound值
-                        if isinstance(batch_score, dict) and 'compound' in batch_score:
-                            batch_score = batch_score['compound']
-                            # 将浮点数映射到0-5的范围
-                            batch_score = round((batch_score + 1) * 2.5)  # -1到1 映射到 0到5
-                            # 确保在有效范围内
-                            batch_score = max(0, min(batch_score, 5))
-                            
-                        batch_scores.append(batch_score)
-                        
-                        # 使用批次中的评论数作为权重
-                        batch_weight = len(batch)
-                        total_weight += batch_weight
-                        
-                        # 收集各评论的情感评分
-                        batch_comment_scores = batch_result.get("comment_scores", {})
-                        
-                        # 重新映射评论索引
-                        start_idx = sum(len(batches[j]) for j in range(i))
-                        for j, score in batch_comment_scores.items():
-                            comment_scores[start_idx + j] = score
-                    
-                    # 计算加权平均情感分数
-                    if total_weight > 0:
-                        weighted_sum = sum(score * (len(batches[i]) / total_weight) for i, score in enumerate(batch_scores))
-                        overall_score = round(weighted_sum)
-                        # 确保分数在有效范围内
-                        overall_score = max(0, min(overall_score, 5))
-                    else:
-                        overall_score = 0
-                    
-                    # 根据情感分数确定标签
-                    sentiment_label = SENTIMENT_SCORE_LABELS.get(overall_score, "无评论")
-                    
-                    logger.info(f"完成分批情感分析，整体情感评分: {overall_score}，情感标签: {sentiment_label}")
-                
-                # 将分析结果添加到每条评论中
-                for i, comment in enumerate(comments):
-                    comment["sentiment_score"] = comment_scores.get(i, 0)
-                
-                logger.info(f"评论情感分析完成，整体情感评分: {overall_score}，情感标签: {sentiment_label}")
-                
             return comments
         
         except Exception as e:
@@ -1288,9 +1132,6 @@ class BaseScraper:
                             "comments": [],
                             "comment_count": 0,
                             "has_comments": False,
-                            "sentiment_score": 0,  # 使用0表示无评论
-                            "sentiment_label": "过期",
-                            "sentiment_analysis": "",
                             "is_before_cutoff": True
                         }
                         results.append(post_result)
@@ -1312,19 +1153,6 @@ class BaseScraper:
                         "has_comments": has_comments
                     }
                     
-                    # 添加情感分析结果（只对有评论的帖子进行分析）
-                    if has_comments and self._post_analyzer:
-                        # 使用评论分析工具分析评论
-                        logger.info(f"对帖子 '{post_result['title'][:30]}...' 的 {len(comments)} 条评论进行情感分析")
-                        sentiment_analysis = self._post_analyzer.analyze_post_data(post_result, comments)
-                        post_result["sentiment_score"] = sentiment_analysis.get("sentiment_score", 0)
-                        post_result["sentiment_label"] = sentiment_analysis.get("sentiment_label", "无评论")
-                        post_result["sentiment_analysis"] = sentiment_analysis.get("insight", "")
-                    else:
-                        post_result["sentiment_score"] = 0  # 无评论设为0
-                        post_result["sentiment_label"] = "无评论" if comment_count == 0 else "未分析"
-                        post_result["sentiment_analysis"] = ""
-                        
                     results.append(post_result)
                     
                 except Exception as e:
@@ -1337,25 +1165,6 @@ class BaseScraper:
         except Exception as e:
             log_error(logger, f"爬取 '{section}' 版块时出错", e, self.debug)
             return []
-    
-    def analyze_post(self, post_data: Dict[str, Any]) -> Dict[str, Any]:
-        """分析帖子及其评论"""
-        if not self._post_analyzer:
-            logger.error("未设置分析工具，无法分析")
-            return post_data
-            
-        # 使用注入的分析器实例
-        try:
-            analysis_results = self._post_analyzer.analyze_post_data(
-                post_data, 
-                post_data.get("comments", [])
-            )
-            # 将分析结果合并到原始数据中
-            post_data.update(analysis_results)
-            return post_data
-        except Exception as e:
-            log_error(logger, "分析帖子时出错", e, self.debug)
-            return post_data
     
     def wait_for_network_idle(self, timeout: int = 5000):
         """等待网络请求完成"""
@@ -1709,46 +1518,6 @@ class BaseScraper:
                 if comments:
                     logger.info(f"成功提取 {len(comments)} 条评论")
                     
-                    # 立即进行情感分析
-                    try:
-                        if self.analyzer and len(comments) > 0:
-                            # 确保comments是字符串列表，而不是字典
-                            comment_texts = []
-                            for item in comments_data:
-                                if isinstance(item, dict) and 'content' in item:
-                                    comment_texts.append(item['content'])
-                                elif isinstance(item, str):
-                                    comment_texts.append(item)
-                                
-                            # 如果成功提取到文本评论，进行批量情感分析
-                            if comment_texts:
-                                logger.debug(f"准备对 {len(comment_texts)} 条评论进行情感分析")
-                                try:
-                                    # 使用DeepSeek分析器的批量分析功能
-                                    if hasattr(self.analyzer.sentiment_analyzer, 'analyze_comments_batch'):
-                                        sentiment_result = self.analyzer.sentiment_analyzer.analyze_comments_batch(comment_texts)
-                                        logger.info(f"评论情感分析结果: {sentiment_result}")
-                                        
-                                        # 将情感分析结果添加到帖子数据中
-                                        post_data['sentiment_analysis'] = sentiment_result
-                                        
-                                    else:
-                                        logger.debug("情感分析器不支持批量分析，使用TelegraphAnalyzer进行分析")
-                                        analysis_result = self.analyzer.analyze_post_data(post_data, comment_texts)
-                                        
-                                        # 合并分析结果到帖子数据
-                                        for key, value in analysis_result.items():
-                                            if key != 'comments':  # 避免重复存储评论
-                                                post_data[key] = value
-                                except Exception as e:
-                                    logger.error(f"进行情感分析时出错: {str(e)}")
-                            else:
-                                logger.warning("未提取到有效的评论文本，跳过情感分析")
-                    except Exception as e:
-                        logger.error(f"情感分析过程中出错: {str(e)}")
-                else:
-                    logger.info("未找到任何评论")
-                
                 # 保存评论数据到帖子中
                 post_data['comments_data'] = comments_data
                 
@@ -1838,50 +1607,37 @@ class BaseScraper:
             logger.error(f"检查帖子日期有效性时出错: {str(e)}")
             return True  # 如果出错，默认为有效 
 
+    def _extract_comments(self, post_result: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        从帖子结果中提取评论
+        
+        Args:
+            post_result: 帖子数据
+            
+        Returns:
+            评论列表
+        """
+        # 如果帖子数据中已有评论，直接返回
+        if "comments" in post_result and post_result["comments"]:
+            return post_result["comments"]
+        
+        # 如果有评论数量但没有评论内容，尝试从评论链接获取
+        if post_result.get("comment_count", 0) > 0 and post_result.get("url"):
+            try:
+                comments = self.extract_comments_for_post(post_result["url"])
+                return comments
+            except Exception as e:
+                logger.warning(f"提取评论失败: {e}")
+                return []
+        
+        # 默认返回空列表
+        return []
+
     def _init_analyzers(self):
         """
         初始化需要的各种分析器实例
         """
-        if self._post_analyzer is not None:
-            return
-            
-        try:
-            from chose_one_agent.modules.telegraph_analyzer import TelegraphAnalyzer
-            
-            self._post_analyzer = TelegraphAnalyzer(
-                debug=self.debug
-            )
-            
-            if self.debug:
-                logger.info("成功初始化帖子分析器")
-                
-        except ImportError as e:
-            logger.warning(f"无法加载分析器模块: {e}")
-            self._post_analyzer = None
-
-    def analyze_post_data(self, post_result: Dict[str, Any], comments: List[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """
-        分析帖子数据
-        
-        Args:
-            post_result: 帖子数据
-            comments: 评论数据
-            
-        Returns:
-            分析结果的字典
-        """
-        # 基础结构
-        result = {
-            "insight": ""
-        }
-        
-        # 记录评论数量
-        comment_count = len(comments) if comments else 0
-        
-        post_result["has_comments"] = comment_count > 0
-        post_result["comments"] = comments or []
-        
-        return result
+        pass
 
     def _process_post_result(self, post_result: Dict[str, Any], is_expired: bool = False) -> Dict[str, Any]:
         """
@@ -1908,12 +1664,5 @@ class BaseScraper:
         comments = self._extract_comments(post_result)
         post_result["has_comments"] = len(comments) > 0
         post_result["comments"] = comments
-        
-        # 如果有评论，添加到帖子中
-        if comments and self._post_analyzer is not None:
-            sentiment_analysis = self.analyze_post_data(post_result, comments)
-            post_result["sentiment_analysis"] = sentiment_analysis.get("insight", "")
-        else:
-            post_result["sentiment_analysis"] = ""
         
         return post_result
