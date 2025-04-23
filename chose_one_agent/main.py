@@ -33,6 +33,12 @@ def parse_args():
         help="截止日期时间，格式为'YYYY-MM-DD HH:MM'，早于此日期的内容将被忽略"
     )
     parser.add_argument(
+        "--end_date", 
+        type=str, 
+        default=None,
+        help="结束日期时间，格式为'YYYY-MM-DD HH:MM'，晚于此日期的内容将被忽略"
+    )
+    parser.add_argument(
         "--headless",
         action="store_true",
         default=SCRAPER_CONFIG["default_headless"],
@@ -90,12 +96,13 @@ def format_results(posts, args):
 
     return output
 
-def run_telegraph_scraper(cutoff_date, sections, headless, sentiment_analyzer="none", deepseek_api_key=None, debug=False, use_db=True):
+def run_telegraph_scraper(cutoff_date, end_date=None, sections=None, headless=True, sentiment_analyzer="none", deepseek_api_key=None, debug=False, use_db=True):
     """
     运行电报爬虫
     
     Args:
-        cutoff_date: 截止日期
+        cutoff_date: 开始日期
+        end_date: 结束日期
         sections: 要爬取的电报子板块列表
         headless: 是否使用无头模式
         sentiment_analyzer: 情感分析器类型
@@ -113,7 +120,11 @@ def run_telegraph_scraper(cutoff_date, sections, headless, sentiment_analyzer="n
     if not processed_sections:
         processed_sections = SCRAPER_CONFIG["default_sections"]
         
-    logger.info("开始爬取电报，截止日期: {0}, 子板块: {1}".format(cutoff_date, processed_sections))
+    # 更新日志信息，包含开始和结束日期
+    date_info = f"开始日期: {cutoff_date}" if cutoff_date else "无开始日期限制"
+    if end_date:
+        date_info += f", 结束日期: {end_date}"
+    logger.info(f"开始爬取电报，{date_info}, 子板块: {processed_sections}")
     
     # 初始化情感分析器
     analyzer = None
@@ -129,6 +140,7 @@ def run_telegraph_scraper(cutoff_date, sections, headless, sentiment_analyzer="n
         # 创建爬虫实例
         scraper = BaseScraper(
             cutoff_date=cutoff_date, 
+            end_date=end_date,
             headless=headless, 
             debug=debug,
             use_db=use_db  # 添加数据库功能开关
@@ -217,6 +229,16 @@ def main():
     try:
         # 解析截止日期，如果解析失败会抛出异常
         cutoff_date = parse_cutoff_date(args.cutoff_date)
+        
+        # 解析结束日期
+        end_date = None
+        if args.end_date:
+            try:
+                end_date = parse_cutoff_date(args.end_date)  # 重用开始日期的解析函数
+            except ValueError as e:
+                logger.error("结束日期解析失败: {0}".format(e))
+                print("\n错误: {0}".format(e))
+                sys.exit(1)
     except ValueError as e:
         logger.error("截止日期解析失败: {0}".format(e))
         print("\n错误: {0}".format(e))
@@ -233,6 +255,7 @@ def main():
         # 爬取电报内容
         results = run_telegraph_scraper(
             cutoff_date, 
+            end_date,
             args.sections, 
             args.headless,
             args.sentiment_analyzer,

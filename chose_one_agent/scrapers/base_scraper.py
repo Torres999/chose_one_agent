@@ -35,17 +35,19 @@ class BaseScraper:
     基础爬虫类，供各功能模块继承使用
     """
     
-    def __init__(self, cutoff_date: datetime.datetime = None, headless: bool = True, debug: bool = False, use_db: bool = True):
+    def __init__(self, cutoff_date: datetime.datetime = None, end_date: datetime.datetime = None, headless: bool = True, debug: bool = False, use_db: bool = True):
         """
         初始化爬虫基础类
         
         Args:
-            cutoff_date: 截止日期，早于此日期的内容将被忽略
+            cutoff_date: 开始日期，早于此日期的内容将被忽略
+            end_date: 结束日期，晚于此日期的内容将被忽略
             headless: 是否使用无头模式运行浏览器
             debug: 是否启用调试模式
             use_db: 是否启用数据库存储功能
         """
         self.cutoff_date = cutoff_date
+        self.end_date = end_date
         self.headless = headless
         self.debug = debug
         self.base_url = BASE_URLS["main"]
@@ -455,46 +457,18 @@ class BaseScraper:
                     else:
                         logger.warning(f"无法从文本 '{date_text}' 中提取日期")
                         result["date"] = datetime.datetime.now().strftime("%Y.%m.%d")
-                else:
-                    # 如果找不到日期元素，表示是当天的帖子
-                    result["date"] = datetime.datetime.now().strftime("%Y.%m.%d")
                     logger.info(f"未找到日期元素，使用当天日期: {result['date']}")
                 
-                # ======= 检查帖子日期是否符合截止日期要求 =======
-                if self.cutoff_date:
-                    # 构建日期时间对象
-                    post_date_str = f"{result['date']} {result['time']}"
-                    post_datetime = None
-                    try:
-                        # 尝试不同的日期格式解析
-                        formats = [
-                            "%Y.%m.%d %H:%M:%S",
-                            "%Y.%m.%d %H:%M",
-                            "%Y-%m-%d %H:%M:%S",
-                            "%Y-%m-%d %H:%M"
-                        ]
-                        for date_format in formats:
-                            try:
-                                post_datetime = datetime.datetime.strptime(post_date_str, date_format)
-                                break
-                            except ValueError:
-                                continue
-                        
-                        # 如果所有格式都失败，尝试使用parse_datetime函数
-                        if not post_datetime:
-                            post_datetime = parse_datetime(post_date_str)
-                        
-                        # 检查是否早于截止日期
-                        if post_datetime and is_before_cutoff(post_datetime, self.cutoff_date):
-                            logger.info(f"帖子日期 {post_date_str} 早于截止日期 {self.cutoff_date}，标记为无效帖子")
-                            # 标记为无效帖子，但标题仍然可能有效
-                            result["is_valid_post"] = result["title"] != "未知标题"
-                            result["is_before_cutoff"] = True
-                            return result  # 提前返回，不处理评论
-                    except Exception as e:
-                        logger.warning(f"检查帖子日期时出错: {e}")
-                        if self.debug:
-                            logger.debug(traceback.format_exc())
+                # ======= 检查帖子日期是否符合日期范围要求 =======
+                post_date_str = f"{result['date']} {result['time']}"
+                is_valid = self.is_valid_post_date(post_date_str)
+                
+                if not is_valid:
+                    logger.info(f"帖子日期 {post_date_str} 不在有效日期范围内，标记为无效帖子")
+                    # 标记为无效帖子，但标题仍然可能有效
+                    result["is_valid_post"] = result["title"] != "未知标题"
+                    result["is_before_cutoff"] = True
+                    return result  # 提前返回，不处理评论
                 
                 # 3. 查找评论链接和评论数量 - 只有在帖子符合日期要求时才执行
                 try:
@@ -1274,14 +1248,15 @@ class BaseScraper:
                 logger.warning("无法导入选择器配置，使用默认选择器")
                 post_container_selector = ".b-c-e6e7ea.telegraph-list"
             
-            # 爬取板块内容 - 传递截止日期
+            # 爬取板块内容 - 不传递截止日期，让extract_post_info和is_valid_post_date方法处理日期验证
             logger.info(f"开始爬取 '{section_name}' 板块内容")
             return self.navigator.scrape_section(
                 section_name,
                 post_container_selector, 
                 self.extract_post_info,
                 30,
-                self.cutoff_date
+                self.cutoff_date,
+                self.end_date
             )
             
         except Exception as e:
@@ -1605,41 +1580,100 @@ class BaseScraper:
         Returns:
             bool: 是否是有效日期
         """
-        if not post_date or not self.cutoff_date:
+        # 增加调试信息，显示参数
+        logger.debug(f"检查帖子日期有效性: post_date={post_date}, cutoff_date={self.cutoff_date}, end_date={self.end_date}")
+        
+        # 如果没有设置时间范围，则默认有效
+        if not post_date:
+            logger.debug("帖子日期为空，默认为有效")
+            return True
+        
+        if not self.cutoff_date and not self.end_date:
+            logger.debug("未设置开始日期和结束日期，默认为有效")
             return True
         
         try:
             # 转换帖子日期字符串为datetime对象
-            if isinstance(post_date, str):
-                # 处理常见的日期格式
-                formats = [
-                    '%Y-%m-%d %H:%M:%S',
-                    '%Y-%m-%d %H:%M',
-                    '%Y/%m/%d %H:%M:%S',
-                    '%Y/%m/%d %H:%M',
-                    '%Y-%m-%d',
-                    '%Y/%m/%d'
-                ]
-                
-                post_datetime = None
-                for fmt in formats:
-                    try:
-                        post_datetime = datetime.strptime(post_date, fmt)
-                        break
-                    except ValueError:
-                        continue
-                    
-                if not post_datetime:
-                    logger.warning(f"无法解析帖子日期: {post_date}")
-                    return True  # 如果无法解析，默认为有效
-            else:
-                post_datetime = post_date
+            post_datetime = self._parse_post_datetime(post_date)
+            if not post_datetime:
+                logger.warning(f"无法解析帖子日期: {post_date}，默认为有效")
+                return True  # 如果无法解析，默认为有效
             
-            # 比较日期
-            return post_datetime >= self.cutoff_date
+            # 详细记录解析结果
+            logger.debug(f"成功解析帖子日期: {post_date} -> {post_datetime}")
+            
+            # 检查是否在有效范围内
+            is_after_start = True
+            is_before_end = True
+            
+            # 检查是否晚于开始日期
+            if self.cutoff_date:
+                is_after_start = post_datetime >= self.cutoff_date
+                logger.debug(f"开始日期检查: {post_datetime} >= {self.cutoff_date} = {is_after_start}")
+            
+            # 检查是否早于结束日期
+            if self.end_date:
+                is_before_end = post_datetime <= self.end_date
+                logger.debug(f"结束日期检查: {post_datetime} <= {self.end_date} = {is_before_end}")
+                
+            # 日志记录
+            if not is_after_start:
+                logger.info(f"帖子日期 {post_datetime} 早于开始日期 {self.cutoff_date}，判定为无效")
+            if not is_before_end:
+                logger.info(f"帖子日期 {post_datetime} 晚于结束日期 {self.end_date}，判定为无效")
+                
+            # 只有同时满足两个条件才是有效的
+            result = is_after_start and is_before_end
+            logger.debug(f"帖子日期有效性判断结果: {result}")
+            return result
+            
         except Exception as e:
             logger.error(f"检查帖子日期有效性时出错: {str(e)}")
-            return True  # 如果出错，默认为有效 
+            if self.debug:
+                logger.error(traceback.format_exc())
+            return True  # 如果出错，默认为有效
+
+    def _parse_post_datetime(self, post_date):
+        """
+        解析帖子日期为datetime对象
+        
+        Args:
+            post_date: 帖子日期（字符串或datetime对象）
+            
+        Returns:
+            datetime对象或None
+        """
+        if isinstance(post_date, datetime.datetime):
+            return post_date
+            
+        if isinstance(post_date, str):
+            # 处理常见的日期格式
+            formats = [
+                '%Y-%m-%d %H:%M:%S',
+                '%Y-%m-%d %H:%M',
+                '%Y/%m/%d %H:%M:%S',
+                '%Y/%m/%d %H:%M',
+                '%Y.%m.%d %H:%M:%S',
+                '%Y.%m.%d %H:%M',
+                '%Y-%m-%d',
+                '%Y/%m/%d',
+                '%Y.%m.%d'
+            ]
+            
+            for fmt in formats:
+                try:
+                    return datetime.datetime.strptime(post_date, fmt)
+                except ValueError:
+                    continue
+        
+        # 尝试使用项目中已有的日期解析函数
+        try:
+            from chose_one_agent.utils.datetime_utils import parse_datetime
+            return parse_datetime(post_date)
+        except (ImportError, Exception):
+            pass
+            
+        return None
 
     def _extract_comments(self, post_result: Dict[str, Any]) -> List[Dict[str, Any]]:
         """

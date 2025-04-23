@@ -399,7 +399,8 @@ class BaseNavigator:
             
     def scrape_section(self, section: str, post_container_selector: str, 
                       extract_post_info_func: Callable, max_posts: int = 50,
-                      cutoff_datetime: Optional[datetime.datetime] = None) -> List[Dict[str, Any]]:
+                      cutoff_datetime: Optional[datetime.datetime] = None,
+                      end_datetime: Optional[datetime.datetime] = None) -> List[Dict[str, Any]]:
         """
         从指定版块获取帖子列表
         
@@ -408,7 +409,8 @@ class BaseNavigator:
             post_container_selector: 帖子容器的CSS选择器
             extract_post_info_func: 提取帖子信息的函数
             max_posts: 最大获取帖子数
-            cutoff_datetime: 截止日期时间对象，早于此时间的帖子将被忽略
+            cutoff_datetime: 开始日期时间对象，早于此时间的帖子将被忽略
+            end_datetime: 结束日期时间对象，晚于此时间的帖子将被忽略
             
         Returns:
             帖子信息列表
@@ -434,14 +436,15 @@ class BaseNavigator:
         
         # 爬取帖子
         posts = self._scrape_posts(post_container_selector, content_box_selector, 
-                                  extract_post_info_func, cutoff_datetime, 
+                                  extract_post_info_func, cutoff_datetime, end_datetime,
                                   processed_ids, results, section, max_posts)
         
         logger.info(f"从 '{section}' 版块共获取了 {len(results)} 个帖子")
         return results
         
     def _scrape_posts(self, post_container_selector: str, content_box_selector: str,
-                     extract_post_info_func: Callable, cutoff_datetime: Optional[datetime.datetime], 
+                     extract_post_info_func: Callable, cutoff_datetime: Optional[datetime.datetime],
+                     end_datetime: Optional[datetime.datetime],
                      processed_ids: set, results: list, section: str, max_posts: int) -> List[Dict[str, Any]]:
         """爬取帖子"""
         try:
@@ -449,7 +452,9 @@ class BaseNavigator:
             
             # 记录截止日期时间
             if cutoff_datetime:
-                logger.info(f"使用截止日期时间: {cutoff_datetime}")
+                logger.info(f"使用开始日期时间: {cutoff_datetime}")
+            if end_datetime:
+                logger.info(f"使用结束日期时间: {end_datetime}")
             
             # 获取帖子容器元素
             logger.info(f"查找帖子容器，使用选择器: '{post_container_selector}'")
@@ -511,19 +516,27 @@ class BaseNavigator:
                             # 构建帖子的完整日期时间对象
                             post_datetime = datetime.datetime.strptime(f"{post_date} {post_time}", "%Y.%m.%d %H:%M:%S")
                             
-                            # 比较帖子时间与截止时间 - 只保留严格晚于截止时间的帖子
-                            if post_datetime > cutoff_datetime:
-                                logger.info(f"帖子时间 {post_datetime} 晚于截止时间 {cutoff_datetime}，保留")
-                                # 添加到结果
+                            # 验证帖子时间是否在有效范围内
+                            valid_post = True
+                            
+                            # 检查是否晚于开始日期
+                            if cutoff_datetime and post_datetime < cutoff_datetime:
+                                logger.info(f"帖子时间 {post_datetime} 早于或等于开始时间 {cutoff_datetime}，丢弃")
+                                valid_post = False
+                                early_post_found = True
+                            
+                            # 检查是否早于结束日期
+                            if valid_post and end_datetime and post_datetime > end_datetime:
+                                logger.info(f"帖子时间 {post_datetime} 晚于结束时间 {end_datetime}，丢弃")
+                                valid_post = False
+                                # 注意：这里不设置early_post_found，因为可能还有后面的帖子在日期范围内
+                            
+                            # 如果帖子有效，添加到结果
+                            if valid_post:
+                                logger.info(f"帖子时间 {post_datetime} 在有效时间范围内，保留")
                                 results.append(post_info)
                                 processed_ids.add(post_id)
                                 all_processed_posts.append(post_info)
-                            else:
-                                # 发现早于截止时间的帖子，设置标志并终止处理
-                                logger.info(f"发现帖子 '{post_info.get('title', '未知标题')[:30]}...' 时间 {post_datetime} 早于截止时间 {cutoff_datetime}")
-                                logger.info(f"由于帖子按时间排序，终止当前模块的所有后续处理")
-                                early_post_found = True
-                                break  # 跳出内容盒子循环
                         except ValueError as e:
                             logger.warning(f"解析帖子时间出错: {post_date} {post_time}, {e}")
                     else:
@@ -603,19 +616,27 @@ class BaseNavigator:
                                 # 构建帖子的完整日期时间对象
                                 post_datetime = datetime.datetime.strptime(f"{post_date} {post_time}", "%Y.%m.%d %H:%M:%S")
                                 
-                                # 比较帖子时间与截止时间 - 只保留严格晚于截止时间的帖子
-                                if post_datetime > cutoff_datetime:
-                                    logger.info(f"帖子时间 {post_datetime} 晚于截止时间 {cutoff_datetime}，保留")
-                                    # 添加到结果
+                                # 验证帖子时间是否在有效范围内
+                                valid_post = True
+                                
+                                # 检查是否晚于开始日期
+                                if cutoff_datetime and post_datetime < cutoff_datetime:
+                                    logger.info(f"帖子时间 {post_datetime} 早于或等于开始时间 {cutoff_datetime}，丢弃")
+                                    valid_post = False
+                                    early_post_found = True
+                                
+                                # 检查是否早于结束日期
+                                if valid_post and end_datetime and post_datetime > end_datetime:
+                                    logger.info(f"帖子时间 {post_datetime} 晚于结束时间 {end_datetime}，丢弃")
+                                    valid_post = False
+                                    # 注意：这里不设置early_post_found，因为可能还有后面的帖子在日期范围内
+                                
+                                # 如果帖子有效，添加到结果
+                                if valid_post:
+                                    logger.info(f"帖子时间 {post_datetime} 在有效时间范围内，保留")
                                     results.append(post_info)
                                     processed_ids.add(post_id)
                                     all_processed_posts.append(post_info)
-                                else:
-                                    # 发现早于截止时间的帖子，设置标志并终止处理
-                                    logger.info(f"发现帖子 '{post_info.get('title', '未知标题')[:30]}...' 时间 {post_datetime} 早于截止时间 {cutoff_datetime}")
-                                    logger.info(f"由于帖子按时间排序，终止当前模块的所有后续处理")
-                                    early_post_found = True
-                                    break  # 跳出内容盒子循环
                             except ValueError as e:
                                 logger.warning(f"解析帖子时间出错: {post_date} {post_time}, {e}")
                         else:
