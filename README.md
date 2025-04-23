@@ -29,6 +29,7 @@ python3 run.py --cutoff_date "2025-04-11 00:00" --sections "看盘" "公司" --s
 
 参数说明:
 - `--cutoff_date`: 指定截止日期时间，格式为"YYYY-MM-DD HH:MM:SS"
+- `--end_date`: 指定开始日期时间，格式为"YYYY-MM-DD HH:MM:SS"
 - `--sections`: 指定要运行的模块，可选值：
   - `看盘`: 只运行看盘板块
   - `公司`: 只运行公司板块
