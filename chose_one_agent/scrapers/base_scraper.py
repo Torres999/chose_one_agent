@@ -1322,16 +1322,6 @@ class BaseScraper:
                     logger.info(f"=== 开始爬取 '{section}' 板块 ===")
                     section_results = self._scrape_section(section)
                     
-                    # 新增：将数据保存到数据库
-                    if self.use_db and self.db_manager and section_results:
-                        try:
-                            logger.info(f"正在将 {len(section_results)} 条 '{section}' 板块数据保存到数据库")
-                            saved_count = self.db_manager.save_posts(section_results, section)
-                            logger.info(f"成功保存 {saved_count}/{len(section_results)} 条数据到数据库")
-                        except Exception as db_error:
-                            logger.error(f"保存 '{section}' 板块数据到数据库时出错: {db_error}")
-                            # 出错时继续执行，不影响原有逻辑
-                    
                     results.extend(section_results)
                 except Exception as e:
                     log_error(logger, f"爬取'{section}'板块时出错", e, self.debug)

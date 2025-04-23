@@ -164,6 +164,11 @@ def run_telegraph_scraper(cutoff_date, sections, headless, sentiment_analyzer="n
                     # 合并分析结果
                     sentiment_analysis.update(analysis_result)
                     
+                    # 重要：将情感分析结果添加回原始帖子数据
+                    post['sentiment_type'] = analysis_result.get('sentiment', '')
+                    post['sentiment_distribution'] = analysis_result.get('distribution', '')
+                    post['key_comments'] = analysis_result.get('key_comments', '')
+                    
                     if debug:
                         logger.debug(f"情感分析结果: {analysis_result}")
                 except Exception as e:
@@ -184,6 +189,19 @@ def run_telegraph_scraper(cutoff_date, sections, headless, sentiment_analyzer="n
         # 仅在调试模式下显示详细日志
         if debug:
             logger.info("电报爬取完成，共处理了 {0} 条电报".format(len(results)))
+            
+        # 情感分析完成后，保存到数据库
+        if use_db and scraper.db_manager:
+            for section in processed_sections:
+                section_posts = [post for post in raw_results if post.get('section') == section]
+                if section_posts:
+                    try:
+                        logger.info(f"正在将 {len(section_posts)} 条 '{section}' 板块数据保存到数据库")
+                        saved_count = scraper.db_manager.save_posts(section_posts, section)
+                        logger.info(f"成功保存 {saved_count}/{len(section_posts)} 条数据到数据库")
+                    except Exception as db_error:
+                        logger.error(f"保存 '{section}' 板块数据到数据库时出错: {db_error}")
+            
         return results
     except Exception as e:
         log_error(logger, "运行电报爬虫时出错", e, debug)

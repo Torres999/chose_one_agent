@@ -102,6 +102,57 @@ class MySQLManager:
             if conn:
                 conn.rollback()
     
+    def _preprocess_post_data(self, post: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        预处理帖子数据，仅转换日期时间格式，其他字段直接使用原数据
+        
+        Args:
+            post: 原始帖子数据
+            
+        Returns:
+            处理后的帖子数据
+        """
+        # 转换日期时间格式
+        post_date = self._parse_date(post.get('date', ''))
+        post_time = self._parse_time(post.get('time', ''))
+        
+        # 直接使用原始数据中的所有字段
+        processed_post = {
+            'title': post.get('title', ''),
+            'date': post_date,
+            'time': post_time,
+            'section': post.get('section', ''),
+            'comment_count': post.get('comment_count', 0),
+            'sentiment_type': post.get('sentiment_type', ''),  # 直接获取原始数据
+            'sentiment_distribution': post.get('sentiment_distribution', ''),  # 直接获取原始数据
+            'key_comments': post.get('key_comments', '')  # 直接获取原始数据
+        }
+        
+        # 记录处理后的字段到日志
+        logger.debug(f"处理后的帖子数据: {processed_post}")
+        
+        return processed_post
+    
+    def _execute_batch_insert(self, cursor, table_name: str, batch_values: List[Tuple]) -> None:
+        """
+        执行批量插入操作
+        
+        Args:
+            cursor: 数据库游标
+            table_name: 表名
+            batch_values: 批量值列表
+        """
+        if not batch_values:
+            return
+            
+        sql = f"""
+            INSERT INTO {table_name} 
+            (title, post_date, post_time, section, comment_count, 
+            sentiment_type, sentiment_distribution, key_comments) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        cursor.executemany(sql, batch_values)
+        
     def save_posts(self, posts: List[Dict[str, Any]], section: str) -> int:
         """
         批量保存帖子数据
@@ -131,155 +182,132 @@ class MySQLManager:
         
         try:
             with conn.cursor() as cursor:
-                # 分批处理
-                for i in range(0, len(posts), self.batch_size):
-                    batch = posts[i:i+self.batch_size]
-                    batch_values = []
-                    latest_date = None
-                    latest_time = None
-                    
-                    for post in batch:
-                        try:
-                            # 记录处理的帖子信息
-                            logger.info(f"处理帖子: {post.get('title', '')}，日期: {post.get('date', '')}, 时间: {post.get('time', '')}")
-                            
-                            # 跳过之前已处理的帖子
-                            if last_checkpoint and self._is_post_processed(post, last_checkpoint):
-                                logger.info(f"帖子已处理，跳过: {post.get('title', '')}")
-                                continue
-                            
-                            # 转换日期时间格式
-                            post_date = self._parse_date(post.get('date', ''))
-                            post_time = self._parse_time(post.get('time', ''))
-                            
-                            # 记录转换后的日期时间
-                            logger.info(f"转换后的日期: {post_date} ({type(post_date).__name__}), 时间: {post_time} ({type(post_time).__name__})")
-                            
-                            # 处理情感分析数据
-                            sentiment_analysis = post.get('sentiment_analysis', {})
-                            comment_count = post.get('comment_count', 0)
-                            
-                            # 提取情感类型
-                            sentiment_type = "中性"  # 默认为中性
-                            if sentiment_analysis:
-                                # 直接获取API返回的情感类型，或使用计算方式
-                                if 'sentiment' in sentiment_analysis:
-                                    sentiment_type = sentiment_analysis.get('sentiment', '中性')
-                                else:
-                                    positive = sentiment_analysis.get('positive_ratio', 0)
-                                    negative = sentiment_analysis.get('negative_ratio', 0)
-                                    if positive > 0.6:
-                                        sentiment_type = "极度积极" if positive > 0.8 else "积极"
-                                    elif negative > 0.6:
-                                        sentiment_type = "极度消极" if negative > 0.8 else "消极"
-                            
-                            # 提取情感分布
-                            sentiment_distribution = ""
-                            if sentiment_analysis:
-                                # 直接获取API返回的情感分布，或使用计算方式
-                                if 'distribution' in sentiment_analysis:
-                                    sentiment_distribution = sentiment_analysis.get('distribution', '')
-                                else:
-                                    positive = sentiment_analysis.get('positive_ratio', 0) * 100
-                                    neutral = sentiment_analysis.get('neutral_ratio', 0) * 100
-                                    negative = sentiment_analysis.get('negative_ratio', 0) * 100
-                                    sentiment_distribution = f"积极 {positive:.1f}% | 中性 {neutral:.1f}% | 消极 {negative:.1f}%"
-                            
-                            # 提取关键评论
-                            key_comments = ""
-                            if sentiment_analysis:
-                                # 直接获取API返回的关键评论，或使用计算方式
-                                if 'key_comments' in sentiment_analysis:
-                                    key_comments = sentiment_analysis.get('key_comments', '')
-                                else:
-                                    key_comments = ", ".join(sentiment_analysis.get('key_words', []))
-                            
-                            # 记录最新的日期和时间
-                            # 统一将日期和时间转换为字符串进行比较
-                            if isinstance(post_date, datetime.date):
-                                post_date_str = post_date.strftime('%Y-%m-%d')
-                            else:
-                                post_date_str = str(post_date)
-                                
-                            if isinstance(post_time, datetime.time):
-                                post_time_str = post_time.strftime('%H:%M:%S')
-                            else:
-                                post_time_str = str(post_time)
-                                
-                            logger.info(f"字符串形式的日期: {post_date_str}, 时间: {post_time_str}")
-                            logger.info(f"当前latest_date: {latest_date} ({type(latest_date).__name__ if latest_date else 'None'}), latest_time: {latest_time} ({type(latest_time).__name__ if latest_time else 'None'})")
-                            
-                            if latest_date is None:
-                                latest_date = post_date
-                                logger.info(f"初始化latest_date: {latest_date} ({type(latest_date).__name__})")
-                            else:
-                                if isinstance(latest_date, datetime.date):
-                                    latest_date_str = latest_date.strftime('%Y-%m-%d')
-                                else:
-                                    latest_date_str = str(latest_date)
-                                    
-                                logger.info(f"比较日期: {post_date_str} > {latest_date_str} = {post_date_str > latest_date_str}")
-                                if post_date_str > latest_date_str:
-                                    latest_date = post_date
-                                    logger.info(f"更新latest_date: {latest_date} ({type(latest_date).__name__})")
-                                    
-                            if latest_time is None:
-                                latest_time = post_time
-                                logger.info(f"初始化latest_time: {latest_time} ({type(latest_time).__name__})")
-                            else:
-                                if isinstance(latest_time, datetime.time):
-                                    latest_time_str = latest_time.strftime('%H:%M:%S')
-                                else:
-                                    latest_time_str = str(latest_time)
-                                    
-                                logger.info(f"比较时间: {post_time_str} > {latest_time_str} = {post_time_str > latest_time_str}")
-                                if post_time_str > latest_time_str:
-                                    latest_time = post_time
-                                    logger.info(f"更新latest_time: {latest_time} ({type(latest_time).__name__})")
-                            
-                            # 添加到批处理值
-                            batch_values.append((
-                                post.get('title', ''),
-                                post_date,
-                                post_time,
-                                section,
-                                comment_count,
-                                sentiment_type,
-                                sentiment_distribution,
-                                key_comments
-                            ))
-                            logger.info(f"添加到批处理值: {post.get('title', '')}")
-                        except Exception as e:
-                            logger.error(f"处理单个帖子时出错: {e}")
-                            logger.error(f"帖子数据: {post}")
-                            # 继续处理下一个帖子
+                batch_values = []
+                latest_date = None
+                latest_time = None
+                
+                for post in posts:
+                    try:
+                        # 记录处理的帖子信息
+                        logger.info(f"处理帖子: {post.get('title', '')}，日期: {post.get('date', '')}, 时间: {post.get('time', '')}")
+                        
+                        # 跳过之前已处理的帖子
+                        if last_checkpoint and self._is_post_processed(post, last_checkpoint):
+                            logger.info(f"帖子已处理，跳过: {post.get('title', '')}")
                             continue
-                    
-                    # 执行批量插入
-                    if batch_values:
-                        sql = f"""
-                            INSERT INTO {table_name} 
-                            (title, post_date, post_time, section, comment_count, 
-                            sentiment_type, sentiment_distribution, key_comments) 
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                        """
-                        cursor.executemany(sql, batch_values)
-                        inserted_count = len(batch_values)
-                        success_count += inserted_count
                         
-                        # 更新断点，确保是字符串类型
-                        if latest_date and latest_time:
-                            # 确保日期和时间是字符串格式
+                        # 预处理帖子数据
+                        processed_post = self._preprocess_post_data(post)
+                        
+                        # 提取处理后的数据
+                        post_date = processed_post['date']
+                        post_time = processed_post['time']
+                        
+                        # 记录转换后的日期时间
+                        logger.info(f"转换后的日期: {post_date} ({type(post_date).__name__}), 时间: {post_time} ({type(post_time).__name__})")
+                        
+                        # 统一将日期和时间转换为字符串进行比较
+                        if isinstance(post_date, datetime.date):
+                            post_date_str = post_date.strftime('%Y-%m-%d')
+                        else:
+                            post_date_str = str(post_date)
+                            
+                        if isinstance(post_time, datetime.time):
+                            post_time_str = post_time.strftime('%H:%M:%S')
+                        else:
+                            post_time_str = str(post_time)
+                            
+                        logger.info(f"字符串形式的日期: {post_date_str}, 时间: {post_time_str}")
+                        logger.info(f"当前latest_date: {latest_date} ({type(latest_date).__name__ if latest_date else 'None'}), latest_time: {latest_time} ({type(latest_time).__name__ if latest_time else 'None'})")
+                        
+                        # 更新最新日期和时间
+                        if latest_date is None:
+                            latest_date = post_date
+                            logger.info(f"初始化latest_date: {latest_date} ({type(latest_date).__name__})")
+                        else:
                             if isinstance(latest_date, datetime.date):
-                                latest_date = latest_date.strftime('%Y-%m-%d')
-                            if isinstance(latest_time, datetime.time):
-                                latest_time = latest_time.strftime('%H:%M:%S')
+                                latest_date_str = latest_date.strftime('%Y-%m-%d')
+                            else:
+                                latest_date_str = str(latest_date)
                                 
-                            self.update_checkpoint(section, latest_date, latest_time, success_count)
+                            logger.info(f"比较日期: {post_date_str} > {latest_date_str} = {post_date_str > latest_date_str}")
+                            if post_date_str > latest_date_str:
+                                latest_date = post_date
+                                logger.info(f"更新latest_date: {latest_date} ({type(latest_date).__name__})")
+                                
+                        if latest_time is None:
+                            latest_time = post_time
+                            logger.info(f"初始化latest_time: {latest_time} ({type(latest_time).__name__})")
+                        else:
+                            if isinstance(latest_time, datetime.time):
+                                latest_time_str = latest_time.strftime('%H:%M:%S')
+                            else:
+                                latest_time_str = str(latest_time)
+                                
+                            logger.info(f"比较时间: {post_time_str} > {latest_time_str} = {post_time_str > latest_time_str}")
+                            if post_time_str > latest_time_str:
+                                latest_time = post_time
+                                logger.info(f"更新latest_time: {latest_time} ({type(latest_time).__name__})")
                         
-                        # 记录日志
-                        if success_count % BATCH_SIZE == 0 or success_count == len(posts):
+                        # 添加到批处理值
+                        batch_values.append((
+                            processed_post['title'],
+                            post_date,
+                            post_time,
+                            processed_post['section'],
+                            processed_post['comment_count'],
+                            processed_post['sentiment_type'],
+                            processed_post['sentiment_distribution'],
+                            processed_post['key_comments']
+                        ))
+                        logger.info(f"添加到批处理值: {processed_post['title']}")
+                        
+                        # 每50条数据保存一次
+                        if len(batch_values) >= self.batch_size:
+                            # 执行批量插入
+                            self._execute_batch_insert(cursor, table_name, batch_values)
+                            success_count += len(batch_values)
+                            
+                            # 更新断点
+                            if latest_date and latest_time:
+                                # 确保日期和时间是字符串格式
+                                if isinstance(latest_date, datetime.date):
+                                    latest_date = latest_date.strftime('%Y-%m-%d')
+                                if isinstance(latest_time, datetime.time):
+                                    latest_time = latest_time.strftime('%H:%M:%S')
+                                    
+                                self.update_checkpoint(section, latest_date, latest_time, len(batch_values))
+                            
+                            # 清空批处理值
+                            batch_values = []
+                            
+                            # 记录日志
                             logger.info(f"已保存 {success_count}/{len(posts)} 条帖子数据到 {section} 板块")
+                        
+                    except Exception as e:
+                        logger.error(f"处理单个帖子时出错: {e}")
+                        logger.error(f"帖子数据: {post}")
+                        # 继续处理下一个帖子
+                        continue
+                
+                # 处理剩余的批处理值
+                if batch_values:
+                    # 执行批量插入
+                    self._execute_batch_insert(cursor, table_name, batch_values)
+                    success_count += len(batch_values)
+                    
+                    # 更新断点
+                    if latest_date and latest_time:
+                        # 确保日期和时间是字符串格式
+                        if isinstance(latest_date, datetime.date):
+                            latest_date = latest_date.strftime('%Y-%m-%d')
+                        if isinstance(latest_time, datetime.time):
+                            latest_time = latest_time.strftime('%H:%M:%S')
+                            
+                        self.update_checkpoint(section, latest_date, latest_time, len(batch_values))
+                    
+                    # 记录日志
+                    logger.info(f"已保存 {success_count}/{len(posts)} 条帖子数据到 {section} 板块")
                 
                 conn.commit()
                 logger.info(f"成功保存 {success_count} 条帖子数据到 {section} 板块")
