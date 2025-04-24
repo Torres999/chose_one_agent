@@ -457,7 +457,7 @@ class BaseScraper:
                     else:
                         logger.warning(f"无法从文本 '{date_text}' 中提取日期")
                         result["date"] = datetime.datetime.now().strftime("%Y.%m.%d")
-                    logger.info(f"未找到日期元素，使用当天日期: {result['date']}")
+                        logger.info(f"未找到日期元素，使用当天日期: {result['date']}")
                 
                 # ======= 检查帖子日期是否符合日期范围要求 =======
                 post_date_str = f"{result['date']} {result['time']}"
@@ -467,8 +467,21 @@ class BaseScraper:
                     logger.info(f"帖子日期 {post_date_str} 不在有效日期范围内，标记为无效帖子")
                     # 标记为无效帖子，但标题仍然可能有效
                     result["is_valid_post"] = result["title"] != "未知标题"
-                    result["is_before_cutoff"] = True
-                    return result  # 提前返回，不处理评论
+                    
+                    # 判断是提前返回还是继续处理
+                    # 帖子日期不符合要求时，不再获取评论，直接返回
+                    post_datetime = self._parse_post_datetime(post_date_str)
+                    if post_datetime and self.cutoff_date and post_datetime < self.cutoff_date:
+                        result["is_before_cutoff"] = True
+                    else:
+                        result["is_before_cutoff"] = False
+                    
+                    # 设置空评论相关字段
+                    result["comments"] = []
+                    result["comment_count"] = 0
+                    
+                    # 无效帖子直接返回，不再查找评论
+                    return result
                 
                 # 3. 查找评论链接和评论数量 - 只有在帖子符合日期要求时才执行
                 try:

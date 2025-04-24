@@ -529,7 +529,7 @@ class BaseNavigator:
                             if valid_post and end_datetime and post_datetime > end_datetime:
                                 logger.info(f"帖子时间 {post_datetime} 晚于结束时间 {end_datetime}，丢弃")
                                 valid_post = False
-                                # 注意：这里不设置early_post_found，因为可能还有后面的帖子在日期范围内
+                                # 不设置early_post_found标志，这里不应该中断爬取
                             
                             # 如果帖子有效，添加到结果
                             if valid_post:
@@ -629,7 +629,7 @@ class BaseNavigator:
                                 if valid_post and end_datetime and post_datetime > end_datetime:
                                     logger.info(f"帖子时间 {post_datetime} 晚于结束时间 {end_datetime}，丢弃")
                                     valid_post = False
-                                    # 注意：这里不设置early_post_found，因为可能还有后面的帖子在日期范围内
+                                    # 不设置early_post_found标志，这里不应该中断爬取
                                 
                                 # 如果帖子有效，添加到结果
                                 if valid_post:
