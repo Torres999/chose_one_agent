@@ -1109,77 +1109,30 @@ class BaseScraper:
             except Exception as e:
                 logger.warning(f"关闭评论详情页时出错: {e}")
     
-    def scrape_section(self, section: str, max_posts: int = 20, cutoff_time: str = None) -> List[Dict[str, Any]]:
-        """从指定版块获取帖子列表并分析"""
-        if not self.navigator or not self.page:
-            logger.error("未设置浏览器实例，无法爬取")
-            return []
+    def scrape_section(self, section: str,
+                      max_posts: int = None,
+                      cutoff_datetime: Optional[datetime.datetime] = None,
+                      end_datetime: Optional[datetime.datetime] = None) -> List[Dict[str, Any]]:
+        """
+        从指定版块获取帖子列表
+        
+        Args:
+            section: 版块名称
+            max_posts: 最大获取帖子数（已弃用，保留参数兼容性）
+            cutoff_datetime: 开始日期时间对象，早于此时间的帖子将被忽略
+            end_datetime: 结束日期时间对象，晚于此时间的帖子将被忽略
             
-        try:
-            # 导入选择器
-            try:
-                from chose_one_agent.modules.sections_config import get_selector
-                post_selector = get_selector("post_items")
-            except ImportError:
-                logger.warning("无法导入sections_config，使用默认选择器")
-                post_selector = ".post, article, .article, .item"
-            
-            posts = self.navigator.scrape_section(
-                section, 
-                post_selector, 
-                self.extract_post_info,
-                max_posts,
-                cutoff_time
-            )
-            
-            # 处理帖子和评论
-            results = []
-            for post_info in posts:
-                try:
-                    # 跳过不符合日期要求的帖子的详细处理
-                    if post_info.get("is_before_cutoff", False):
-                        logger.info(f"帖子 '{post_info.get('title', '未知标题')[:30]}...' 早于截止日期，跳过详细处理")
-                        post_result = {
-                            "title": post_info.get("title", "未知标题"),
-                            "date": post_info.get("date", ""),
-                            "time": post_info.get("time", ""),
-                            "section": section,
-                            "comments": [],
-                            "comment_count": 0,
-                            "has_comments": False,
-                            "is_before_cutoff": True
-                        }
-                        results.append(post_result)
-                        continue
-                    
-                    # 获取评论信息
-                    comments = post_info.get("comments", [])
-                    comment_count = post_info.get("comment_count", 0)
-                    
-                    # 构建帖子信息
-                    has_comments = len(comments) > 0
-                    post_result = {
-                        "title": post_info.get("title", "未知标题"),
-                        "date": post_info.get("date", ""),
-                        "time": post_info.get("time", ""),
-                        "section": section,
-                        "comments": comments,
-                        "comment_count": comment_count,
-                        "has_comments": has_comments
-                    }
-                    
-                    results.append(post_result)
-                    
-                except Exception as e:
-                    logger.error(f"处理帖子 '{post_info.get('title', '未知标题')}' 时出错: {e}")
-                    if self.debug:
-                        logger.error(traceback.format_exc())
-                        
-            return results
-            
-        except Exception as e:
-            log_error(logger, f"爬取 '{section}' 版块时出错", e, self.debug)
-            return []
+        Returns:
+            帖子信息列表
+        """
+        post_container_selector = self.get_post_container_selector()
+        return self.navigator.scrape_section(
+            section=section,
+            post_container_selector=post_container_selector,
+            extract_post_info_func=self.extract_post_info,
+            cutoff_datetime=cutoff_datetime,
+            end_datetime=end_datetime
+        )
     
     def wait_for_network_idle(self, timeout: int = 5000):
         """等待网络请求完成"""
@@ -1267,7 +1220,6 @@ class BaseScraper:
                 section_name,
                 post_container_selector, 
                 self.extract_post_info,
-                30,
                 self.cutoff_date,
                 self.end_date
             )
@@ -1631,9 +1583,9 @@ class BaseScraper:
                 
             # 日志记录
             if not is_after_start:
-                logger.info(f"帖子日期 {post_datetime} 早于开始日期 {self.cutoff_date}，判定为无效")
+                logger.info(f"帖子日期 {post_datetime} 早于开始日期 {self.cutoff_date}，判定为【无效】")
             if not is_before_end:
-                logger.info(f"帖子日期 {post_datetime} 晚于结束日期 {self.end_date}，判定为无效")
+                logger.info(f"帖子日期 {post_datetime} 晚于结束日期 {self.end_date}，判定为【无效】")
                 
             # 只有同时满足两个条件才是有效的
             result = is_after_start and is_before_end

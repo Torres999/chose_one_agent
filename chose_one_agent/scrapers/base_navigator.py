@@ -398,7 +398,7 @@ class BaseNavigator:
             return False
             
     def scrape_section(self, section: str, post_container_selector: str, 
-                      extract_post_info_func: Callable, max_posts: int = 50,
+                      extract_post_info_func: Callable,
                       cutoff_datetime: Optional[datetime.datetime] = None,
                       end_datetime: Optional[datetime.datetime] = None) -> List[Dict[str, Any]]:
         """
@@ -408,7 +408,6 @@ class BaseNavigator:
             section: 版块名称
             post_container_selector: 帖子容器的CSS选择器
             extract_post_info_func: 提取帖子信息的函数
-            max_posts: 最大获取帖子数
             cutoff_datetime: 开始日期时间对象，早于此时间的帖子将被忽略
             end_datetime: 结束日期时间对象，晚于此时间的帖子将被忽略
             
@@ -434,19 +433,98 @@ class BaseNavigator:
             logger.warning("无法导入选择器配置，使用默认内容盒子选择器")
             content_box_selector = ".clearfix.m-b-15.f-s-16.telegraph-content-box"
         
-        # 爬取帖子
-        posts = self._scrape_posts(post_container_selector, content_box_selector, 
-                                  extract_post_info_func, cutoff_datetime, end_datetime,
-                                  processed_ids, results, section, max_posts)
+        # 设置最大尝试翻页次数，避免无限翻页
+        max_page_attempts = SCRAPER_CONSTANTS["max_retries"]
+        page_attempts = 0
+        early_post_found = False
         
+        # 记录上一次获取的容器数量，用于避免重复处理
+        previous_container_count = 0
+        
+        # 获取帖子容器元素
+        logger.info(f"查找帖子容器，使用选择器: '{post_container_selector}'")
+        containers = self.page.query_selector_all(post_container_selector)
+        
+        if not containers:
+            logger.error(f"未找到帖子容器，选择器: '{post_container_selector}'")
+            return []
+            
+        logger.info(f"找到 {len(containers)} 个帖子容器")
+        
+        # 爬取帖子
+        posts = self._scrape_posts(containers, 0, content_box_selector, 
+                                 extract_post_info_func, cutoff_datetime, end_datetime,
+                                 processed_ids, results, section)
+        
+        # 更新上一次处理的容器数量
+        previous_container_count = len(containers)
+        
+        # 检查是否找到早于开始日期的帖子
+        for post in posts:
+            if post.get("is_before_cutoff", False):
+                early_post_found = True
+                logger.info("已找到早于开始日期的帖子，不再继续爬取")
+                break
+        
+        # 如果没有找到早于开始日期的帖子，尝试加载更多页面
+        while not early_post_found and page_attempts < max_page_attempts:
+            page_attempts += 1
+            logger.info(f"尝试加载更多页面以继续爬取 (尝试 {page_attempts}/{max_page_attempts})")
+            
+            if not self._load_more_posts():
+                logger.info("无法加载更多页面，停止尝试")
+                break
+                
+            # 重新获取所有容器
+            containers = self.page.query_selector_all(post_container_selector)
+            
+            if len(containers) <= previous_container_count:
+                logger.info(f"加载更多后未获取到新容器，停止尝试")
+                break
+                
+            logger.info(f"加载更多后，容器总数从 {previous_container_count} 增加到 {len(containers)}")
+            
+            # 只处理新增的容器，避免重复处理
+            more_posts = self._scrape_posts(containers, previous_container_count, content_box_selector,
+                                          extract_post_info_func, cutoff_datetime, end_datetime,
+                                          processed_ids, results, section)
+            
+            # 更新已处理的容器数量
+            previous_container_count = len(containers)
+            
+            # 仅检查是否找到早于开始日期的帖子
+            for post in more_posts:
+                if post.get("is_before_cutoff", False):
+                    early_post_found = True
+                    logger.info("已找到早于开始日期的帖子，不再继续爬取")
+                    break
+        
+
+        logger.info(f"已经/最大尝试翻页次数 {page_attempts}/{max_page_attempts}")
         logger.info(f"从 '{section}' 版块共获取了 {len(results)} 个帖子")
         return results
         
-    def _scrape_posts(self, post_container_selector: str, content_box_selector: str,
+    def _scrape_posts(self, containers: List, start_index: int, content_box_selector: str,
                      extract_post_info_func: Callable, cutoff_datetime: Optional[datetime.datetime],
                      end_datetime: Optional[datetime.datetime],
-                     processed_ids: set, results: list, section: str, max_posts: int) -> List[Dict[str, Any]]:
-        """爬取帖子"""
+                     processed_ids: set, results: list, section: str) -> List[Dict[str, Any]]:
+        """
+        爬取帖子
+        
+        Args:
+            containers: 帖子容器元素列表
+            start_index: 开始处理的容器索引
+            content_box_selector: 内容盒子选择器
+            extract_post_info_func: 提取帖子信息的函数
+            cutoff_datetime: 开始日期时间
+            end_datetime: 结束日期时间
+            processed_ids: 已处理的帖子ID集合
+            results: 结果列表
+            section: 板块名称
+            
+        Returns:
+            处理的帖子列表
+        """
         try:
             import datetime
             
@@ -456,211 +534,170 @@ class BaseNavigator:
             if end_datetime:
                 logger.info(f"使用结束日期时间: {end_datetime}")
             
-            # 获取帖子容器元素
-            logger.info(f"查找帖子容器，使用选择器: '{post_container_selector}'")
-            containers = self.page.query_selector_all(post_container_selector)
-            
             if not containers:
-                logger.error(f"未找到帖子容器，选择器: '{post_container_selector}'")
-                # 输出部分DOM结构以便调试
-                if self.debug:
-                    try:
-                        html = self.page.content()
-                        logger.debug(f"页面HTML前200字符: {html[:200]}...")
-                    except Exception:
-                        pass
+                logger.error("未提供帖子容器")
                 return []
                 
-            logger.info(f"找到 {len(containers)} 个帖子容器")
+            logger.info(f"开始处理从索引 {start_index} 开始的容器，共 {len(containers) - start_index} 个")
             
             # 在容器中查找内容盒子
             all_processed_posts = []
-            early_post_found = False  # 新增: 早期帖子标志，用于提前终止处理
+            early_post_found = False  # 早期帖子标志，用于提前终止处理
             
-            for i, container in enumerate(containers):
-                if len(results) >= max_posts:
-                    logger.info(f"已达到目标帖子数 {max_posts}，停止处理")
-                    break
-                    
-                logger.info(f"处理容器 #{i+1}")
+            # 实现简单的批处理机制，每批处理最多10个容器
+            batch_size = 10
+            for batch_start in range(start_index, len(containers), batch_size):
+                batch_end = min(batch_start + batch_size, len(containers))
+                logger.info(f"处理容器批次 {batch_start+1} 到 {batch_end}")
                 
-                # 查找内容盒子
-                content_boxes = container.query_selector_all(content_box_selector)
-                if not content_boxes:
-                    logger.warning(f"在容器 #{i+1} 中未找到内容盒子，选择器: '{content_box_selector}'")
-                    continue
-                    
-                logger.info(f"在容器 #{i+1} 中找到 {len(content_boxes)} 个内容盒子")
-                
-                for box in content_boxes:
-                    # 提取帖子ID
-                    post_id = box.get_attribute("id") or hash(box.inner_html())
-                    
-                    # 如果已处理过该帖子，跳过
-                    if post_id in processed_ids:
-                        continue
+                for i in range(batch_start, batch_end):
+                    try:
+                        container = containers[i]
+                        logger.info(f"处理容器 #{i+1}")
                         
-                    # 提取帖子信息
-                    post_info = extract_post_info_func(box)
-                    post_info["section"] = section
-                    
-                    # 检查是否在截止时间之后
-                    if cutoff_datetime:
-                        post_date = post_info.get("date", datetime.datetime.now().strftime("%Y.%m.%d"))
-                        post_time = post_info.get("time", "")
+                        # 查找内容盒子
                         try:
-                            # 确保时间格式统一，添加秒数如果没有
-                            if post_time and post_time.count(':') == 1:
-                                post_time += ':00'
-                            
-                            # 构建帖子的完整日期时间对象
-                            post_datetime = datetime.datetime.strptime(f"{post_date} {post_time}", "%Y.%m.%d %H:%M:%S")
-                            
-                            # 验证帖子时间是否在有效范围内
-                            valid_post = True
-                            
-                            # 检查是否晚于开始日期
-                            if cutoff_datetime and post_datetime < cutoff_datetime:
-                                logger.info(f"帖子时间 {post_datetime} 早于或等于开始时间 {cutoff_datetime}，丢弃")
-                                valid_post = False
-                                early_post_found = True
-                            
-                            # 检查是否早于结束日期
-                            if valid_post and end_datetime and post_datetime > end_datetime:
-                                logger.info(f"帖子时间 {post_datetime} 晚于结束时间 {end_datetime}，丢弃")
-                                valid_post = False
-                                # 不设置early_post_found标志，这里不应该中断爬取
-                            
-                            # 如果帖子有效，添加到结果
-                            if valid_post:
-                                logger.info(f"帖子时间 {post_datetime} 在有效时间范围内，保留")
-                                results.append(post_info)
-                                processed_ids.add(post_id)
-                                all_processed_posts.append(post_info)
-                        except ValueError as e:
-                            logger.warning(f"解析帖子时间出错: {post_date} {post_time}, {e}")
-                    else:
-                        # 如果没有截止时间限制，直接添加到结果
-                        results.append(post_info)
-                        processed_ids.add(post_id)
-                        all_processed_posts.append(post_info)
-                    
-                    if len(results) >= max_posts:
-                        break
+                            content_boxes = container.query_selector_all(content_box_selector)
+                            if not content_boxes:
+                                logger.warning(f"在容器 #{i+1} 中未找到内容盒子，选择器: '{content_box_selector}'")
+                                continue
+                                
+                            logger.info(f"在容器 #{i+1} 中找到 {len(content_boxes)} 个内容盒子")
+                        except Exception as content_error:
+                            error_msg = str(content_error)
+                            if "object has been collected" in error_msg or "stale" in error_msg:
+                                logger.warning(f"容器 #{i+1} 的内容盒子查询失败（元素已回收），跳过: {error_msg}")
+                                continue
+                            else:
+                                raise  # 其他错误继续抛出
+                        
+                        for box in content_boxes:
+                            try:
+                                # 提取帖子ID
+                                try:
+                                    post_id = box.get_attribute("id") or hash(box.inner_html())
+                                except Exception as id_error:
+                                    error_msg = str(id_error)
+                                    if "object has been collected" in error_msg:
+                                        logger.warning(f"提取帖子ID时元素已回收，跳过此内容盒子")
+                                        continue
+                                    else:
+                                        raise
+                                
+                                # 如果已处理过该帖子，跳过
+                                if post_id in processed_ids:
+                                    logger.debug(f"帖子ID {post_id} 已处理过，跳过")
+                                    continue
+                                    
+                                # 提取帖子信息
+                                try:
+                                    post_info = extract_post_info_func(box)
+                                    post_info["section"] = section
+                                    
+                                    # 记录帖子标题，方便调试
+                                    title = post_info.get("title", "未知标题")
+                                    logger.info(f"提取到帖子: {title[:30]}{'...' if len(title) > 30 else ''}")
+                                    
+                                except Exception as extract_error:
+                                    error_msg = str(extract_error)
+                                    if "object has been collected" in error_msg:
+                                        logger.warning(f"提取帖子信息时元素已回收，跳过此内容盒子")
+                                        continue
+                                    else:
+                                        raise
+                                
+                                # 检查是否在截止时间之后
+                                if cutoff_datetime or end_datetime:
+                                    post_date = post_info.get("date", datetime.datetime.now().strftime("%Y.%m.%d"))
+                                    post_time = post_info.get("time", "")
+                                    try:
+                                        # 确保时间格式统一，添加秒数如果没有
+                                        if post_time and post_time.count(':') == 1:
+                                            post_time += ':00'
+                                        
+                                        # 构建帖子的完整日期时间对象
+                                        post_datetime = datetime.datetime.strptime(f"{post_date} {post_time}", "%Y.%m.%d %H:%M:%S")
+                                        
+                                        # 验证帖子时间是否在有效范围内
+                                        valid_post = True
+                                        
+                                        # 检查是否晚于开始日期
+                                        if cutoff_datetime and post_datetime < cutoff_datetime:
+                                            logger.info(f"帖子时间 {post_datetime} 早于或等于开始时间 {cutoff_datetime}，【丢弃】")
+                                            valid_post = False
+                                            early_post_found = True
+                                            # 标记帖子为early_post_found以便上层函数可以检测到
+                                            post_info["is_before_cutoff"] = True
+                                            all_processed_posts.append(post_info) # 添加到处理列表以便上层函数可以检测到
+                                        
+                                        # 检查是否早于结束日期
+                                        if valid_post and end_datetime and post_datetime > end_datetime:
+                                            logger.info(f"帖子时间 {post_datetime} 晚于结束时间 {end_datetime}，【丢弃】")
+                                            valid_post = False
+                                            # 明确标记不是early_post
+                                            post_info["is_before_cutoff"] = False
+                                            # 不设置early_post_found标志，这里不应该中断爬取
+                                        
+                                        # 如果帖子有效，添加到结果
+                                        if valid_post:
+                                            logger.info(f"帖子时间 {post_datetime} 在有效时间范围内，保留")
+                                            # 有效帖子明确标记不是early_post
+                                            post_info["is_before_cutoff"] = False
+                                            results.append(post_info)
+                                            processed_ids.add(post_id)
+                                            all_processed_posts.append(post_info)
+                                            logger.info(f">>> 成功保存有效帖子: {title[:30]}{'...' if len(title) > 30 else ''}")
+                                    except ValueError as e:
+                                        logger.warning(f"解析帖子时间出错: {post_date} {post_time}, {e}")
+                                else:
+                                    # 如果没有截止时间限制，直接添加到结果
+                                    # 明确标记不是early_post
+                                    post_info["is_before_cutoff"] = False
+                                    results.append(post_info)
+                                    processed_ids.add(post_id)
+                                    all_processed_posts.append(post_info)
+                                    title = post_info.get("title", "未知标题")
+                                    logger.info(f">>> 成功保存帖子(无时间限制): {title[:30]}{'...' if len(title) > 30 else ''}")
+                            except Exception as box_error:
+                                # 处理单个内容盒子的错误，不影响其他盒子处理
+                                logger.warning(f"处理内容盒子时出错，跳过此盒子: {str(box_error)}")
+                                if self.debug:
+                                    logger.debug(traceback.format_exc())
+                                continue
+                        
+                        # 如果已发现早于截止时间的帖子，终止容器处理
+                        if early_post_found:
+                            logger.info(f"发现早于截止时间的帖子，跳过后续容器处理")
+                            break
+                    except Exception as container_error:
+                        # 处理单个容器的错误，不影响整体流程
+                        error_msg = str(container_error)
+                        if "object has been collected" in error_msg or "stale" in error_msg:
+                            logger.warning(f"容器 #{i+1} 已被回收或无效，跳过处理: {error_msg}")
+                        else:
+                            logger.error(f"处理容器 #{i+1} 时出错: {error_msg}")
+                            if self.debug:
+                                logger.error(traceback.format_exc())
+                        continue
                 
-                # 如果已发现早于截止时间的帖子，终止容器处理
+                # 批次处理完成后，帮助垃圾回收
+                if batch_end < len(containers) and not early_post_found:
+                    content_boxes = None  # 清理内容盒子引用
+                    try:
+                        # 尝试触发JavaScript垃圾回收
+                        self.page.evaluate("() => { if(typeof gc !== 'undefined') { gc(); } }")
+                    except:
+                        pass  # 忽略可能的执行错误
+                
+                # 如果已发现早于截止时间的帖子，不再处理后续批次
                 if early_post_found:
-                    logger.info(f"发现早于截止时间的帖子，跳过后续容器处理")
+                    logger.info(f"已找到早于截止时间的帖子，不再处理后续批次")
                     break
             
             # 如果已发现早于截止时间的帖子，不再加载更多内容
             if early_post_found:
                 logger.info(f"已找到早于截止时间的帖子，不再加载更多内容，返回已收集的结果")
-                return all_processed_posts
-                
-            # 尝试加载更多帖子，直到达到目标数量
-            attempts = 0
-            while len(results) < max_posts and attempts < 3:
-                attempts += 1
-                logger.info(f"已获取 {len(results)}/{max_posts} 个帖子，尝试加载更多 (尝试 {attempts}/3)")
-                
-                # 尝试加载更多帖子
-                if not self._load_more_posts():
-                    logger.info("没有更多帖子可加载，停止加载")
-                    break
-                    
-                # 获取新容器
-                new_containers = self.page.query_selector_all(post_container_selector)
-                if len(new_containers) <= len(containers):
-                    logger.info("加载更多后未发现新帖子，停止加载")
-                    break
-                    
-                logger.info(f"加载更多后，帖子容器数从 {len(containers)} 增加到 {len(new_containers)}")
-                
-                # 处理新增的容器
-                for i in range(len(containers), len(new_containers)):
-                    if len(results) >= max_posts:
-                        break
-                        
-                    container = new_containers[i]
-                    logger.info(f"处理新容器 #{i+1}")
-                    
-                    # 查找内容盒子
-                    content_boxes = container.query_selector_all(content_box_selector)
-                    if not content_boxes:
-                        continue
-                        
-                    logger.info(f"在新容器 #{i+1} 中找到 {len(content_boxes)} 个内容盒子")
-                    
-                    for box in content_boxes:
-                        # 提取帖子ID
-                        post_id = box.get_attribute("id") or hash(box.inner_html())
-                        
-                        # 如果已处理过该帖子，跳过
-                        if post_id in processed_ids:
-                            continue
-                            
-                        # 提取帖子信息
-                        post_info = extract_post_info_func(box)
-                        post_info["section"] = section
-                        
-                        # 检查是否在截止时间之后
-                        if cutoff_datetime:
-                            post_date = post_info.get("date", datetime.datetime.now().strftime("%Y.%m.%d"))
-                            post_time = post_info.get("time", "")
-                            try:
-                                # 确保时间格式统一，添加秒数如果没有
-                                if post_time and post_time.count(':') == 1:
-                                    post_time += ':00'
-                                
-                                # 构建帖子的完整日期时间对象
-                                post_datetime = datetime.datetime.strptime(f"{post_date} {post_time}", "%Y.%m.%d %H:%M:%S")
-                                
-                                # 验证帖子时间是否在有效范围内
-                                valid_post = True
-                                
-                                # 检查是否晚于开始日期
-                                if cutoff_datetime and post_datetime < cutoff_datetime:
-                                    logger.info(f"帖子时间 {post_datetime} 早于或等于开始时间 {cutoff_datetime}，丢弃")
-                                    valid_post = False
-                                    early_post_found = True
-                                
-                                # 检查是否早于结束日期
-                                if valid_post and end_datetime and post_datetime > end_datetime:
-                                    logger.info(f"帖子时间 {post_datetime} 晚于结束时间 {end_datetime}，丢弃")
-                                    valid_post = False
-                                    # 不设置early_post_found标志，这里不应该中断爬取
-                                
-                                # 如果帖子有效，添加到结果
-                                if valid_post:
-                                    logger.info(f"帖子时间 {post_datetime} 在有效时间范围内，保留")
-                                    results.append(post_info)
-                                    processed_ids.add(post_id)
-                                    all_processed_posts.append(post_info)
-                            except ValueError as e:
-                                logger.warning(f"解析帖子时间出错: {post_date} {post_time}, {e}")
-                        else:
-                            # 如果没有截止时间限制，直接添加到结果
-                            results.append(post_info)
-                            processed_ids.add(post_id)
-                            all_processed_posts.append(post_info)
-                        
-                        if len(results) >= max_posts:
-                            break
-                    
-                    # 如果已发现早于截止时间的帖子，终止容器处理
-                    if early_post_found:
-                        logger.info(f"发现早于截止时间的帖子，跳过后续容器处理")
-                        break
-                
-                # 如果已发现早于截止时间的帖子，不再继续加载更多内容
-                if early_post_found:
-                    logger.info(f"已找到早于截止时间的帖子，不再加载更多内容")
-                    break
-                
-                # 更新容器列表
-                containers = new_containers
-                
+            
             return all_processed_posts
             
         except Exception as e:
@@ -740,4 +777,20 @@ class BaseNavigator:
             
         except Exception as e:
             log_error(logger, "加载更多帖子时出错", e, self.debug)
+            return False
+            
+    def _is_element_valid(self, element) -> bool:
+        """检查元素是否有效（未被回收）"""
+        if not element:
+            return False
+        try:
+            # 尝试执行无害的操作检查元素是否有效
+            element.evaluate("el => el.tagName")
+            return True
+        except Exception as e:
+            error_msg = str(e)
+            if "object has been collected" in error_msg or "stale" in error_msg:
+                return False
+            # 其他类型的错误可能不是元素回收问题
+            logger.warning(f"检查元素有效性时遇到非标准错误: {error_msg}")
             return False 
