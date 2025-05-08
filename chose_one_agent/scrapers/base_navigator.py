@@ -527,6 +527,7 @@ class BaseNavigator:
         """
         try:
             import datetime
+            import gc
             
             # 记录截止日期时间
             if cutoff_datetime:
@@ -544,16 +545,20 @@ class BaseNavigator:
             all_processed_posts = []
             early_post_found = False  # 早期帖子标志，用于提前终止处理
             
-            # 实现简单的批处理机制，每批处理最多10个容器
-            batch_size = 10
+            # 实现简单的批处理机制，每批处理最多5个容器（原来是10个）
+            batch_size = 5  # 减小批处理大小
             for batch_start in range(start_index, len(containers), batch_size):
                 batch_end = min(batch_start + batch_size, len(containers))
                 logger.info(f"处理容器批次 {batch_start+1} 到 {batch_end}")
+                
+                # 用于收集当前批次处理的容器
+                batch_containers = []
                 
                 for i in range(batch_start, batch_end):
                     try:
                         container = containers[i]
                         logger.info(f"处理容器 #{i+1}")
+                        batch_containers.append(container)
                         
                         # 查找内容盒子
                         try:
@@ -680,14 +685,21 @@ class BaseNavigator:
                                 logger.error(traceback.format_exc())
                         continue
                 
-                # 批次处理完成后，帮助垃圾回收
+                # 批次处理完成后强化垃圾回收
                 if batch_end < len(containers) and not early_post_found:
-                    content_boxes = None  # 清理内容盒子引用
+                    # 清理引用
+                    content_boxes = None
+                    batch_containers = None  # 显式释放容器引用
+                    
+                    # 强制触发JavaScript和Python垃圾回收
                     try:
-                        # 尝试触发JavaScript垃圾回收
+                        logger.info("批次处理完成，执行垃圾回收...")
                         self.page.evaluate("() => { if(typeof gc !== 'undefined') { gc(); } }")
-                    except:
-                        pass  # 忽略可能的执行错误
+                        gc.collect()  # 触发Python垃圾回收
+                        time.sleep(0.5)  # 短暂暂停，给系统喘息时间
+                        logger.info("垃圾回收执行完成")
+                    except Exception as gc_error:
+                        logger.warning(f"执行垃圾回收时出错: {gc_error}")
                 
                 # 如果已发现早于截止时间的帖子，不再处理后续批次
                 if early_post_found:
