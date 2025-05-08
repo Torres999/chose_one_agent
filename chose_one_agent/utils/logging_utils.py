@@ -11,7 +11,7 @@ from typing import Optional, Dict, Any, Callable
 from chose_one_agent.utils.config import LOG_CONFIG
 
 # 设置基本日志格式
-LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+LOG_FORMAT = '%(asctime)s - %(levelname)s - %(message)s'
 DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 
 def setup_logging(
