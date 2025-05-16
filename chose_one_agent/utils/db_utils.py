@@ -193,7 +193,7 @@ class MySQLManager:
                         
                         # 跳过之前已处理的帖子
                         if last_checkpoint and self._is_post_processed(post, last_checkpoint):
-                            logger.info(f"帖子已处理，跳过: {post.get('title', '')}")
+                            logger.info(f"帖子已处理，跳过: {post.get('title', '')}，断点时间: {last_checkpoint.get('last_post_date')} {last_checkpoint.get('last_post_time')}")
                             continue
                         
                         # 预处理帖子数据
@@ -364,7 +364,28 @@ class MySQLManager:
         else:
             post_time = str(post_time)
             
-        # 如果帖子日期早于断点日期，或者日期相同但时间早于断点时间，则认为已处理
+        # 格式化日期和时间确保格式一致，然后进行比较
+        # 确保日期格式为'YYYY-MM-DD'
+        if '-' in post_date and '-' in last_date:
+            # 将日期转换为datetime.date对象进行比较
+            try:
+                post_date_obj = datetime.datetime.strptime(post_date, '%Y-%m-%d').date()
+                last_date_obj = datetime.datetime.strptime(last_date, '%Y-%m-%d').date()
+                
+                # 日期不同，直接比较日期
+                if post_date_obj != last_date_obj:
+                    return post_date_obj < last_date_obj
+                
+                # 日期相同，比较时间
+                post_time_obj = datetime.datetime.strptime(post_time, '%H:%M:%S').time()
+                last_time_obj = datetime.datetime.strptime(last_time, '%H:%M:%S').time()
+                return post_time_obj <= last_time_obj
+            except ValueError as e:
+                logger.warning(f"日期时间格式转换失败: {e}, 将使用字符串比较")
+                # 如果转换失败，回退到字符串比较
+                return (post_date < last_date) or (post_date == last_date and post_time <= last_time)
+        
+        # 如果格式不匹配，回退到字符串比较
         return (post_date < last_date) or (post_date == last_date and post_time <= last_time)
     
     def _parse_date(self, date_str: str) -> str:

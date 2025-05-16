@@ -28,7 +28,7 @@ DATETIME_FORMATS = {
 
 # 爬虫相关常量
 SCRAPER_CONSTANTS = {
-    "max_retries": 20,         # 最大尝试翻页次数，很大程度决定了爬取的帖子数量，可以终止爬取
+    "max_retries": 50,         # 最大尝试翻页次数，很大程度决定了爬取的帖子数量，可以终止爬取
     "default_timeout": 30000,  # 毫秒
     "short_timeout": 5000,     # 毫秒
     "page_load_wait": 2,       # 秒

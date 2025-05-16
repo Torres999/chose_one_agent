@@ -496,7 +496,7 @@ class BaseScraper:
                         logger.debug(f"帖子元素HTML前500个字符: {post_html[:500]}...")
                     
                     # ======= 方法1: 在最近的父级DOM中查找评论链接 =======
-                    logger.info("方法1: 在父级DOM结构中查找评论链接")
+                    logger.debug("方法1: 在父级DOM结构中查找评论链接")
                     
                     # 在帖子元素中先找兄弟元素
                     try:
@@ -534,7 +534,7 @@ class BaseScraper:
                                 if selector_path:
                                     # 使用选择器路径在页面中查找元素
                                     parent_el = self.page.query_selector(selector_path)
-                                    logger.info(f"使用选择器路径 '{selector_path}' 找到父元素")
+                                    logger.debug(f"使用选择器路径 '{selector_path}' 找到父元素")
                             except Exception as inner_e:
                                 logger.warning(f"转换为ElementHandle时出错: {inner_e}")
                             
@@ -569,7 +569,7 @@ class BaseScraper:
                     
                     # ======= 方法2: 直接在页面中查找与当前帖子关联的评论链接 =======
                     if not detail_link:
-                        logger.info("方法2: 在页面中查找与当前帖子相关的评论链接")
+                        logger.debug("方法2: 在页面中查找与当前帖子相关的评论链接")
                         
                         try:
                             # 获取帖子标题，用于标识
@@ -588,7 +588,7 @@ class BaseScraper:
                             
                             # 查找所有评论链接
                             comment_links = self.page.query_selector_all("a[href*='/detail/']")
-                            logger.info(f"在页面中找到 {len(comment_links)} 个包含'/detail/'的链接")
+                            logger.debug(f"在页面中找到 {len(comment_links)} 个包含'/detail/'的链接")
                             
                             # 筛选含有"评论"文本的链接
                             valid_links = []
@@ -597,7 +597,7 @@ class BaseScraper:
                                 if "评论" in text and ("(" in text or "（" in text):
                                     valid_links.append(link)
                             
-                            logger.info(f"其中 {len(valid_links)} 个链接包含'评论'文本")
+                            logger.debug(f"其中 {len(valid_links)} 个链接包含'评论'文本")
                             
                             # 如果有多个链接，选择位置最接近当前帖子的一个
                             if valid_links:
@@ -626,7 +626,7 @@ class BaseScraper:
                                 if best_link:
                                     href = best_link.get_attribute("href") or ""
                                     text = best_link.inner_text().strip()
-                                    logger.info(f"找到最匹配的评论链接: {href}, 文本='{text}'")
+                                    logger.debug(f"找到最匹配的评论链接: {href}, 文本='{text}'")
                                     
                                     # 提取评论数
                                     count_match = re.search(r'评论.*?(\d+)', text) or re.search(r'\((\d+)\)', text)
