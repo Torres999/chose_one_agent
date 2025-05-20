@@ -1138,54 +1138,6 @@ class BaseScraper:
         """等待网络请求完成"""
         self.page.wait_for_load_state("networkidle", timeout=timeout)
     
-    def _navigate_to_telegraph(self) -> bool:
-        """导航到Telegraph主页"""
-        try:
-            # 使用常量替换硬编码的电报URL
-            telegraph_url = BASE_URLS["telegraph"]
-            
-            # 导航到Telegraph主页
-            logger.info(f"正在导航到电报: {telegraph_url}")
-            success = self.navigator.navigate_to_url(telegraph_url)
-            
-            if success:
-                logger.info("成功导航到电报主页")
-                
-                # 等待页面加载完成
-                self.wait_for_network_idle()
-                
-                # 导入选择器
-                try:
-                    from chose_one_agent.modules.sections_config import get_selector
-                    post_container_selector = get_selector("post_items")
-                except ImportError:
-                    logger.warning("无法导入选择器配置，使用默认选择器")
-                    post_container_selector = ".b-c-e6e7ea.telegraph-list"
-                
-                logger.info(f"使用帖子容器选择器: '{post_container_selector}'")
-                
-                # 检查页面是否有内容元素
-                post_containers = self.page.query_selector_all(post_container_selector)
-                if post_containers:
-                    logger.info(f"找到 {len(post_containers)} 个帖子容器")
-                    
-                    # 输出第一个容器的部分HTML用于调试
-                    if self.debug and post_containers:
-                        first_container_html = post_containers[0].inner_html()
-                        logger.debug(f"第一个帖子容器HTML前150字符: {first_container_html[:150]}...")
-                else:
-                    logger.warning(f"未找到任何帖子容器，选择器: '{post_container_selector}'")
-                    
-                    # 在调试模式下，输出部分HTML用于调试
-                    if self.debug:
-                        html = self.page.content()
-                        logger.debug(f"页面HTML前300字符: {html[:300]}...")
-                    
-            return success
-        except Exception as e:
-            log_error(logger, "导航到电报主页时出错", e, self.debug)
-            return False
-    
     def _scrape_section(self, section_name: str) -> List[Dict[str, Any]]:
         """
         爬取特定板块的内容
@@ -1205,14 +1157,16 @@ class BaseScraper:
             # 等待页面加载
             self.wait_for_network_idle()
             
-            # 获取帖子容器选择器
+            # 获取帖子容器选择器 - 修改选择器策略，优先使用内容盒子选择器
             try:
                 from chose_one_agent.modules.sections_config import get_selector
                 post_container_selector = get_selector("post_items")
-                logger.info(f"使用帖子容器选择器: '{post_container_selector}'")
             except ImportError:
                 logger.warning("无法导入选择器配置，使用默认选择器")
-                post_container_selector = ".b-c-e6e7ea.telegraph-list"
+                # 主选择器改为内容盒子选择器
+                post_container_selector = ".clearfix.m-b-15.f-s-16.telegraph-content-box"
+            
+            logger.info(f"使用帖子容器选择器: '{post_container_selector}'")
             
             # 爬取板块内容 - 不传递截止日期，让extract_post_info和is_valid_post_date方法处理日期验证
             logger.info(f"开始爬取 '{section_name}' 板块内容")
@@ -1699,3 +1653,54 @@ class BaseScraper:
         post_result["comments"] = comments
         
         return post_result
+
+    def _navigate_to_telegraph(self) -> bool:
+        """导航到Telegraph主页"""
+        try:
+            # 使用常量替换硬编码的电报URL
+            telegraph_url = BASE_URLS["telegraph"]
+            
+            # 导航到Telegraph主页
+            logger.info(f"正在导航到电报: {telegraph_url}")
+            success = self.navigator.navigate_to_url(telegraph_url)
+            
+            if success:
+                logger.info("成功导航到电报主页")
+                
+                # 等待页面加载完成
+                self.wait_for_network_idle()
+                
+                # 导入选择器
+                try:
+                    from chose_one_agent.modules.sections_config import get_selector
+                    post_container_selector = get_selector("post_items")
+                except ImportError:
+                    logger.warning("无法导入选择器配置，使用默认选择器")
+                    # 修改默认选择器顺序，优先使用内容盒子选择器
+                    post_container_selector = ".clearfix.m-b-15.f-s-16.telegraph-content-box"
+                
+                logger.info(f"使用帖子容器选择器: '{post_container_selector}'")
+                
+                # 检查页面是否有内容元素
+                post_containers = self.page.query_selector_all(post_container_selector)
+                
+                if not post_containers:
+                    # 如果第一个选择器失败，尝试备选选择器
+                    backup_selector = ".b-c-e6e7ea.telegraph-list"
+                    logger.info(f"主选择器未找到内容，尝试备选选择器: '{backup_selector}'")
+                    post_containers = self.page.query_selector_all(backup_selector)
+                    
+                    if not post_containers:
+                        logger.warning(f"未找到任何帖子容器，选择器: '{post_container_selector}' 和 '{backup_selector}'")
+                    else:
+                        logger.info(f"使用备选选择器找到 {len(post_containers)} 个帖子容器")
+                else:
+                    logger.info(f"找到 {len(post_containers)} 个帖子容器")
+                
+                return True
+            
+            return False
+        
+        except Exception as e:
+            log_error(logger, "导航到Telegraph主页时出错", e, self.debug)
+            return False

@@ -446,6 +446,16 @@ class BaseNavigator:
         containers = self.page.query_selector_all(post_container_selector)
         
         if not containers:
+            # 如果未找到帖子容器，尝试使用内容盒子选择器作为备选
+            if post_container_selector != content_box_selector:
+                logger.warning(f"未找到帖子容器，尝试使用内容盒子选择器: '{content_box_selector}'")
+                containers = self.page.query_selector_all(content_box_selector)
+                if containers:
+                    logger.info(f"使用内容盒子选择器找到 {len(containers)} 个容器")
+                    # 使用内容盒子作为容器
+                    post_container_selector = content_box_selector
+        
+        if not containers:
             logger.error(f"未找到帖子容器，选择器: '{post_container_selector}'")
             return []
             
@@ -562,12 +572,25 @@ class BaseNavigator:
                         
                         # 查找内容盒子
                         try:
-                            content_boxes = container.query_selector_all(content_box_selector)
-                            if not content_boxes:
-                                logger.warning(f"在容器 #{i+1} 中未找到内容盒子，选择器: '{content_box_selector}'")
-                                continue
-                                
-                            logger.info(f"在容器 #{i+1} 中找到 {len(content_boxes)} 个内容盒子")
+                            # 检查容器是否与内容盒子选择器匹配
+                            container_class = container.get_attribute("class") or ""
+                            content_box_class = content_box_selector.replace(".", "")
+                            
+                            # 如果容器本身就是内容盒子，直接使用容器
+                            if content_box_class in container_class:
+                                logger.info(f"容器 #{i+1} 本身就是内容盒子")
+                                content_boxes = [container]
+                            else:
+                                # 否则在容器内查找内容盒子
+                                content_boxes = container.query_selector_all(content_box_selector)
+                                if not content_boxes:
+                                    logger.warning(f"在容器 #{i+1} 中未找到内容盒子，选择器: '{content_box_selector}'")
+                                    
+                                    # 如果找不到内容盒子，尝试直接使用容器
+                                    logger.info(f"尝试直接使用容器 #{i+1} 作为内容盒子")
+                                    content_boxes = [container]
+                                else:
+                                    logger.info(f"在容器 #{i+1} 中找到 {len(content_boxes)} 个内容盒子")
                         except Exception as content_error:
                             error_msg = str(content_error)
                             if "object has been collected" in error_msg or "stale" in error_msg:
