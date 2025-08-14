@@ -584,7 +584,7 @@ class BaseNavigator:
                                 # 否则在容器内查找内容盒子
                                 content_boxes = container.query_selector_all(content_box_selector)
                                 if not content_boxes:
-                                    logger.warning(f"在容器 #{i+1} 中未找到内容盒子，选择器: '{content_box_selector}'")
+                                    # logger.warning(f"在容器 #{i+1} 中未找到内容盒子，选择器: '{content_box_selector}'")
                                     
                                     # 如果找不到内容盒子，尝试直接使用容器
                                     logger.info(f"尝试直接使用容器 #{i+1} 作为内容盒子")

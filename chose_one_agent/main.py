@@ -151,6 +151,16 @@ def run_telegraph_scraper(cutoff_date, end_date=None, sections=None, headless=Tr
         
         # 转换为format_results预期的格式
         results = []
+        
+        # 初始化股票信息提取器
+        try:
+            from chose_one_agent.modules.stock_extractor import StockExtractor
+            stock_extractor = StockExtractor()
+            logger.info("股票信息提取器初始化成功")
+        except ImportError as e:
+            logger.error(f"导入股票信息提取器失败: {e}")
+            stock_extractor = None
+        
         for post in raw_results:
             # 提取评论
             comments = post.get("comments", [])
@@ -185,6 +195,24 @@ def run_telegraph_scraper(cutoff_date, end_date=None, sections=None, headless=Tr
                         logger.debug(f"情感分析结果: {analysis_result}")
                 except Exception as e:
                     logger.error(f"情感分析失败: {e}")
+            
+            # 提取股票信息
+            if stock_extractor:
+                try:
+                    title = post.get("title", "")
+                    stock_info = stock_extractor.extract_stock_info(title)
+                    
+                    # 将股票信息添加到帖子数据中
+                    post['stock_name'] = stock_info.get('stock_name', '')
+                    post['stock_code'] = stock_info.get('stock_code', '')
+                    
+                except Exception as e:
+                    logger.error(f"提取股票信息失败: {e}")
+                    post['stock_name'] = ''
+                    post['stock_code'] = ''
+            else:
+                post['stock_name'] = ''
+                post['stock_code'] = ''
             
             # 创建7元素元组: (标题,日期,时间,板块,_,情感分析,内容)
             result_tuple = (

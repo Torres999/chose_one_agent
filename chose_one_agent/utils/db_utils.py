@@ -63,6 +63,8 @@ class MySQLManager:
                         sentiment_type VARCHAR(32) COMMENT '评论情绪',
                         sentiment_distribution VARCHAR(256) COMMENT '情感分布',
                         key_comments TEXT COMMENT '关键评论',
+                        stock_name VARCHAR(128) COMMENT '股票名称',
+                        stock_code VARCHAR(32) COMMENT '股票代码',
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='公司板块帖子表';
                 """)
@@ -79,6 +81,8 @@ class MySQLManager:
                         sentiment_type VARCHAR(32) COMMENT '评论情绪',
                         sentiment_distribution VARCHAR(256) COMMENT '情感分布',
                         key_comments TEXT COMMENT '关键评论',
+                        stock_name VARCHAR(128) COMMENT '股票名称',
+                        stock_code VARCHAR(32) COMMENT '股票代码',
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'
                     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='看盘板块帖子表';
                 """)
@@ -125,7 +129,9 @@ class MySQLManager:
             'comment_count': post.get('comment_count', 0),
             'sentiment_type': post.get('sentiment_type', ''),  # 直接获取原始数据
             'sentiment_distribution': post.get('sentiment_distribution', ''),  # 直接获取原始数据
-            'key_comments': post.get('key_comments', '')  # 直接获取原始数据
+            'key_comments': post.get('key_comments', ''),  # 直接获取原始数据
+            'stock_name': post.get('stock_name', ''),  # 股票名称
+            'stock_code': post.get('stock_code', '')  # 股票代码
         }
         
         # 记录处理后的字段到日志
@@ -148,8 +154,8 @@ class MySQLManager:
         sql = f"""
             INSERT INTO {table_name} 
             (title, post_date, post_time, section, comment_count, 
-            sentiment_type, sentiment_distribution, key_comments) 
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            sentiment_type, sentiment_distribution, key_comments, stock_name, stock_code) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         cursor.executemany(sql, batch_values)
         
@@ -230,7 +236,7 @@ class MySQLManager:
                             else:
                                 latest_date_str = str(latest_date)
                                 
-                            logger.info(f"比较日期: {post_date_str} > {latest_date_str} = {post_date_str > latest_date_str}")
+                            # logger.info(f"比较日期: {post_date_str} > {latest_date_str} = {post_date_str > latest_date_str}")
                             if post_date_str > latest_date_str:
                                 latest_date = post_date
                                 logger.info(f"更新latest_date: {latest_date} ({type(latest_date).__name__})")
@@ -244,7 +250,7 @@ class MySQLManager:
                             else:
                                 latest_time_str = str(latest_time)
                                 
-                            logger.info(f"比较时间: {post_time_str} > {latest_time_str} = {post_time_str > latest_time_str}")
+                            # logger.info(f"比较时间: {post_time_str} > {latest_time_str} = {post_time_str > latest_time_str}")
                             if post_time_str > latest_time_str:
                                 latest_time = post_time
                                 logger.info(f"更新latest_time: {latest_time} ({type(latest_time).__name__})")
@@ -258,7 +264,9 @@ class MySQLManager:
                             processed_post['comment_count'],
                             processed_post['sentiment_type'],
                             processed_post['sentiment_distribution'],
-                            processed_post['key_comments']
+                            processed_post['key_comments'],
+                            processed_post['stock_name'],
+                            processed_post['stock_code']
                         ))
                         logger.info(f"添加到批处理值: {processed_post['title']}")
                         
