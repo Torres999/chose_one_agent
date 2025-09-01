@@ -355,10 +355,12 @@ class StockExtractor:
             股票名称，如果未找到则返回None
         """
         try:
-            # 数字板模式：如"4天3板南京商旅"
+            # 数字板模式：如"4天3板南京商旅"、"2连板隆扬电子"
             board_patterns = [
                 r'【\d+天\d+板([^：]+)：',  # 【4天3板南京商旅：
                 r'\d+天\d+板([^：\s]+)',   # 4天3板南京商旅
+                r'【\d+连板([^：]+)：',    # 【2连板隆扬电子：
+                r'\d+连板([^：\s]+)',      # 2连板隆扬电子
             ]
             
             for pattern in board_patterns:
@@ -367,8 +369,8 @@ class StockExtractor:
                     full_text = matches[0].strip()
                     
                     # 进一步提取数字板后面的公司名称
-                    # 移除"X天X板"部分，只保留公司名称
-                    company_name = re.sub(r'^\d+天\d+板', '', full_text).strip()
+                    # 移除"X天X板"或"X连板"部分，只保留公司名称
+                    company_name = re.sub(r'^\d+(?:天\d+板|连板)', '', full_text).strip()
                     
                     if self._is_valid_stock_name(company_name):
                         logger.debug(f"数字板模式法提取到股票名称: {company_name}")
