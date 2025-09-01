@@ -4,8 +4,10 @@
 """
 import re
 import logging
+import pymysql
 from typing import Dict, List, Tuple, Optional
 from chose_one_agent.utils.logging_utils import get_logger
+from chose_one_agent.utils.db_config import DB_CONFIG
 
 # 获取日志记录器
 logger = get_logger(__name__)
@@ -28,6 +30,9 @@ class StockExtractor:
             # 创业板：以300、301开头的6位数字
             'gem_board': r'(30[01]\d{3})'
         }
+        
+        # 股票代码缓存：从数据库加载并缓存所有股票代码
+        self.stock_cache = self._load_stock_cache()
         
         # 常见股票名称关键词
         self.stock_keywords = [
@@ -60,18 +65,22 @@ class StockExtractor:
         # 先提取股票名称
         stock_name = self._extract_stock_name(title)
         
-        # 如果提取到股票名称，通过新浪API获取股票代码
+        # 如果提取到股票名称，从缓存中查找股票代码
         stock_code = None
         if stock_name:
-            stock_code = self.get_stock_code_by_name(stock_name)
+            stock_code = self._get_stock_code_from_cache(stock_name)
         
         result = {
             'stock_name': stock_name,
             'stock_code': stock_code
         }
         
-        if stock_name or stock_code:
-            logger.info(f"从标题 '{title}' 中提取到股票信息: {result}")
+        if stock_name:
+            if stock_code and stock_code != "失败":
+                logger.info(f"从标题 '{title}' 中提取到股票信息: {result}")
+            else:
+                result['stock_code'] = "失败"
+                logger.info(f"从标题 '{title}' 中提取到股票信息: {result}")
         
         return result
     
@@ -86,7 +95,7 @@ class StockExtractor:
             股票代码，如果未找到则返回None
         """
         # 原有的股票代码提取逻辑已删除，因为公司板块标题通常不包含股票代码
-        # 股票代码现在通过公司名称调用外部API获取
+        # 股票代码现在通过公司名称从数据库缓存中获取
         return None
     
     def _extract_stock_name(self, title: str) -> Optional[str]:
@@ -224,224 +233,58 @@ class StockExtractor:
         
         return results
     
-    def get_stock_code_by_name(self, company_name: str) -> str:
+    def _load_stock_cache(self) -> Dict[str, str]:
         """
-        通过公司名称调用多个API获取股票代码，提高成功率
+        从数据库加载所有股票代码并缓存
+        
+        Returns:
+            股票名称到股票代码的映射字典
+        """
+        cache = {}
+        try:
+            conn = pymysql.connect(**DB_CONFIG)
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT stock_name, stock_code FROM stocks")
+                results = cursor.fetchall()
+                
+                for stock_name, stock_code in results:
+                    if stock_name and stock_code:
+                        cache[stock_name] = stock_code
+                        
+            conn.close()
+            logger.info(f"从数据库加载了 {len(cache)} 只股票的代码缓存")
+            
+        except Exception as e:
+            logger.error(f"从数据库加载股票代码缓存失败: {e}")
+            
+        return cache
+    
+    def _get_stock_code_from_cache(self, company_name: str) -> str:
+        """
+        从缓存中查找股票代码
         
         Args:
             company_name: 公司名称
             
         Returns:
-            股票代码，如果获取失败则返回"失败"
+            股票代码，如果未找到则返回"失败"
         """
         if not company_name:
             return "失败"
-        
-        # 按优先级尝试不同的API：腾讯（主要）-> 新浪 -> 东方财富
-        apis = [
-            self._try_tencent_api,
-            self._try_sina_api,
-            self._try_eastmoney_api
-        ]
-        
-        for api_func in apis:
-            try:
-                result = api_func(company_name)
-                if result != "失败":
-                    return result
-            except Exception as e:
-                # 不记录具体哪个API失败，继续尝试下一个
-                continue
-        
-        logger.warning(f"所有API都未找到公司 '{company_name}' 的股票代码")
+            
+        # 精确匹配
+        if company_name in self.stock_cache:
+            return self.stock_cache[company_name]
+            
+        # 模糊匹配：查找包含公司名称的股票
+        for stock_name, stock_code in self.stock_cache.items():
+            if company_name in stock_name or stock_name in company_name:
+                return stock_code
+                
+        logger.warning(f"未在数据库中找到公司 '{company_name}' 的股票代码")
         return "失败"
     
-    def _try_tencent_api(self, company_name: str) -> str:
-        """
-        尝试通过腾讯股票API获取股票代码
-        
-        Args:
-            company_name: 公司名称
-            
-        Returns:
-            股票代码，如果获取失败则返回"失败"
-        """
-        try:
-            import requests
-            
-            # 腾讯股票搜索API - 使用股票名称搜索
-            search_url = "https://qt.gtimg.cn/q=s_" + company_name
-            
-            response = requests.get(search_url, timeout=2)
-            
-            if response.status_code == 200:
-                content = response.text
-                
-                # 腾讯API返回格式：v_s_股票代码="股票代码~股票名称~其他信息..."
-                if 'v_s_' in content and '=' in content:
-                    # 提取股票代码
-                    lines = content.strip().split('\n')
-                    for line in lines:
-                        if line.startswith('v_s_') and '=' in line:
-                            # 解析格式：v_s_股票代码="股票代码~股票名称~其他信息..."
-                            parts = line.split('=')
-                            if len(parts) >= 2:
-                                # 提取股票代码部分
-                                stock_code_part = parts[0].replace('v_s_', '')
-                                data_part = parts[1].strip('"')
-                                
-                                if data_part and '~' in data_part:
-                                    data_items = data_part.split('~')
-                                    if len(data_items) >= 2:
-                                        stock_code = data_items[0].strip()
-                                        stock_name = data_items[1].strip()
-                                        
-                                        # 验证股票代码格式（6位数字）
-                                        if stock_code.isdigit() and len(stock_code) == 6:
-                                            logger.info(f"通过腾讯API获取到股票代码: {company_name} -> {stock_code}")
-                                            return stock_code
-            
-            # 如果直接搜索失败，尝试模糊搜索
-            fuzzy_url = f"https://qt.gtimg.cn/q=s_{company_name[:2]}"
-            fuzzy_response = requests.get(fuzzy_url, timeout=2)
-            
-            if fuzzy_response.status_code == 200:
-                fuzzy_content = fuzzy_response.text
-                # 同样的解析逻辑...
-                if 'v_s_' in fuzzy_content and '=' in fuzzy_content:
-                    lines = fuzzy_content.strip().split('\n')
-                    for line in lines:
-                        if line.startswith('v_s_') and '=' in line:
-                            parts = line.split('=')
-                            if len(parts) >= 2:
-                                stock_code_part = parts[0].replace('v_s_', '')
-                                data_part = parts[1].strip('"')
-                                
-                                if data_part and '~' in data_part:
-                                    data_items = data_part.split('~')
-                                    if len(data_items) >= 2:
-                                        stock_code = data_items[0].strip()
-                                        stock_name = data_items[1].strip()
-                                        
-                                        # 检查公司名称是否匹配
-                                        if stock_name and company_name in stock_name or stock_name in company_name:
-                                            if stock_code.isdigit() and len(stock_code) == 6:
-                                                logger.info(f"通过腾讯API模糊搜索获取到股票代码: {company_name} -> {stock_code}")
-                                                return stock_code
-            
-            return "失败"
-            
-        except requests.exceptions.Timeout:
-            return "失败"
-        except Exception as e:
-            return "失败"
-    
-    def _try_sina_api(self, company_name: str) -> str:
-        """
-        尝试通过新浪股票API获取股票代码
-        
-        Args:
-            company_name: 公司名称
-            
-        Returns:
-            股票代码，如果获取失败则返回"失败"
-        """
-        try:
-            import requests
-            
-            # 新浪股票搜索API
-            search_url = f"https://suggest3.sinajs.cn/suggest/name={company_name}"
-            
-            response = requests.get(search_url, timeout=2)
-            
-            if response.status_code == 200:
-                content = response.text
-                
-                # 解析新浪API返回的数据格式
-                # 格式：var suggest_data="股票代码,股票名称,拼音,其他信息..."
-                if 'var suggest_data=' in content:
-                    # 提取数据部分
-                    data_start = content.find('var suggest_data="') + len('var suggest_data="')
-                    data_end = content.find('"', data_start)
-                    
-                    if data_start > 0 and data_end > data_start:
-                        data_content = content[data_start:data_end]
-                        
-                        # 分割数据
-                        if data_content and data_content != 'null':
-                            items = data_content.split(';')
-                            
-                            for item in items:
-                                if item and ',' in item:
-                                    parts = item.split(',')
-                                    if len(parts) >= 2:
-                                        stock_code = parts[0].strip()
-                                        stock_name = parts[1].strip()
-                                        
-                                        # 验证股票代码格式（6位数字）
-                                        if stock_code.isdigit() and len(stock_code) == 6:
-                                            logger.info(f"通过新浪API获取到股票代码: {company_name} -> {stock_code}")
-                                            return stock_code
-            
-            return "失败"
-            
-        except requests.exceptions.Timeout:
-            return "失败"
-        except Exception as e:
-            return "失败"
-    
-    def _try_eastmoney_api(self, company_name: str) -> str:
-        """
-        尝试通过东方财富API获取股票代码
-        
-        Args:
-            company_name: 公司名称
-            
-        Returns:
-            股票代码，如果获取失败则返回"失败"
-        """
-        try:
-            import requests
-            
-            # 东方财富股票搜索API
-            search_url = f"http://suggest3.sinajs.cn/suggest/name={company_name}"
-            
-            response = requests.get(search_url, timeout=2)
-            
-            if response.status_code == 200:
-                content = response.text
-                
-                # 东方财富API返回格式与新浪类似
-                if 'var suggest_data=' in content:
-                    # 提取数据部分
-                    data_start = content.find('var suggest_data="') + len('var suggest_data="')
-                    data_end = content.find('"', data_start)
-                    
-                    if data_start > 0 and data_end > data_start:
-                        data_content = content[data_start:data_end]
-                        
-                        # 分割数据
-                        if data_content and data_content != 'null':
-                            items = data_content.split(';')
-                            
-                            for item in items:
-                                if item and ',' in item:
-                                    parts = item.split(',')
-                                    if len(parts) >= 2:
-                                        stock_code = parts[0].strip()
-                                        stock_name = parts[1].strip()
-                                        
-                                        # 验证股票代码格式（6位数字）
-                                        if stock_code.isdigit() and len(stock_code) == 6:
-                                            logger.info(f"通过东方财富API获取到股票代码: {company_name} -> {stock_code}")
-                                            return stock_code
-            
-            return "失败"
-            
-        except requests.exceptions.Timeout:
-            return "失败"
-        except Exception as e:
-            return "失败"
+
     
     def _extract_name_by_colon(self, title: str) -> Optional[str]:
         """
