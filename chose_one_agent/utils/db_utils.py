@@ -277,14 +277,27 @@ class MySQLManager:
                             success_count += len(batch_values)
                             
                             # 更新断点
-                            if latest_date and latest_time:
-                                # 确保日期和时间是字符串格式
-                                if isinstance(latest_date, datetime.date):
-                                    latest_date = latest_date.strftime('%Y-%m-%d')
-                                if isinstance(latest_time, datetime.time):
-                                    latest_time = latest_time.strftime('%H:%M:%S')
-                                    
-                                self.update_checkpoint(section, latest_date, latest_time, len(batch_values))
+                            # 获取当前时间作为后备
+                            current_time = datetime.datetime.now()
+                            current_date_str = current_time.strftime('%Y-%m-%d')
+                            current_time_str = current_time.strftime('%H:%M:%S')
+                            
+                            if latest_date:
+                                # 有日期，优先使用帖子的时间，如果没有则使用当前时间
+                                final_date = latest_date.strftime('%Y-%m-%d') if isinstance(latest_date, datetime.date) else str(latest_date)
+                                if latest_time and isinstance(latest_time, datetime.time):
+                                    final_time = latest_time.strftime('%H:%M:%S')
+                                elif latest_time:
+                                    final_time = str(latest_time)
+                                else:
+                                    # 如果 latest_time 为空或 None，使用当前时间
+                                    final_time = current_time_str
+                                    logger.info(f"帖子时间为空，使用当前时间: {final_time}")
+                                self.update_checkpoint(section, final_date, final_time, len(batch_values))
+                            else:
+                                # 没有新帖子，使用当前时间更新断点
+                                self.update_checkpoint(section, current_date_str, current_time_str, 0)
+                                logger.info(f"没有新帖子，使用当前时间更新断点: {current_date_str} {current_time_str}")
                             
                             # 清空批处理值
                             batch_values = []
@@ -305,14 +318,27 @@ class MySQLManager:
                     success_count += len(batch_values)
                     
                     # 更新断点
-                    if latest_date and latest_time:
-                        # 确保日期和时间是字符串格式
-                        if isinstance(latest_date, datetime.date):
-                            latest_date = latest_date.strftime('%Y-%m-%d')
-                        if isinstance(latest_time, datetime.time):
-                            latest_time = latest_time.strftime('%H:%M:%S')
-                            
-                        self.update_checkpoint(section, latest_date, latest_time, len(batch_values))
+                    # 获取当前时间作为后备
+                    current_time = datetime.datetime.now()
+                    current_date_str = current_time.strftime('%Y-%m-%d')
+                    current_time_str = current_time.strftime('%H:%M:%S')
+                    
+                    if latest_date:
+                        # 有日期，优先使用帖子的时间，如果没有则使用当前时间
+                        final_date = latest_date.strftime('%Y-%m-%d') if isinstance(latest_date, datetime.date) else str(latest_date)
+                        if latest_time and isinstance(latest_time, datetime.time):
+                            final_time = latest_time.strftime('%H:%M:%S')
+                        elif latest_time:
+                            final_time = str(latest_time)
+                        else:
+                            # 如果 latest_time 为空或 None，使用当前时间
+                            final_time = current_time_str
+                            logger.info(f"帖子时间为空，使用当前时间: {final_time}")
+                        self.update_checkpoint(section, final_date, final_time, len(batch_values))
+                    else:
+                        # 没有新帖子，使用当前时间更新断点
+                        self.update_checkpoint(section, current_date_str, current_time_str, 0)
+                        logger.info(f"没有新帖子，使用当前时间更新断点: {current_date_str} {current_time_str}")
                     
                     # 记录日志
                     logger.info(f"已保存 {success_count}/{len(posts)} 条帖子数据到 {section} 板块")

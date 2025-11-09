@@ -178,7 +178,7 @@ def run_telegraph_scraper(cutoff_date, end_date=None, sections=None, headless=Tr
             }
             
             # 如果有评论且启用了情感分析器，进行情感分析
-            if comment_texts and analyzer and len(comment_texts) > 0:
+            if comment_texts and analyzer and len(comment_texts) > 1:
                 try:
                     logger.info(f"对帖子 '{post.get('title', '未知标题')}' 的 {len(comment_texts)} 条评论进行【情感分析】")
                     analysis_result = analyzer.analyze_comments(comment_texts)

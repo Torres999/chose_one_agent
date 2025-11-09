@@ -26,6 +26,7 @@ installed.cfg
 MANIFEST
 
 # Virtual environments
+.venv/
 env
 venv
 env/
