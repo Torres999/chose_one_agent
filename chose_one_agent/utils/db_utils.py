@@ -224,36 +224,41 @@ class MySQLManager:
                             post_time_str = str(post_time)
                             
                         logger.info(f"字符串形式的日期: {post_date_str}, 时间: {post_time_str}")
-                        logger.info(f"当前latest_date: {latest_date} ({type(latest_date).__name__ if latest_date else 'None'}), latest_time: {latest_time} ({type(latest_time).__name__ if latest_time else 'None'})")
                         
-                        # 更新最新日期和时间
-                        if latest_date is None:
-                            latest_date = post_date
-                            logger.info(f"初始化latest_date: {latest_date} ({type(latest_date).__name__})")
-                        else:
-                            if isinstance(latest_date, datetime.date):
-                                latest_date_str = latest_date.strftime('%Y-%m-%d')
-                            else:
-                                latest_date_str = str(latest_date)
-                                
-                            # logger.info(f"比较日期: {post_date_str} > {latest_date_str} = {post_date_str > latest_date_str}")
-                            if post_date_str > latest_date_str:
+                        # 将日期和时间组合成datetime对象进行比较
+                        try:
+                            current_datetime = datetime.datetime.strptime(f"{post_date_str} {post_time_str}", '%Y-%m-%d %H:%M:%S')
+                            
+                            # 更新最新日期和时间（作为一个整体）
+                            if latest_date is None or latest_time is None:
                                 latest_date = post_date
-                                logger.info(f"更新latest_date: {latest_date} ({type(latest_date).__name__})")
-                                
-                        if latest_time is None:
-                            latest_time = post_time
-                            logger.info(f"初始化latest_time: {latest_time} ({type(latest_time).__name__})")
-                        else:
-                            if isinstance(latest_time, datetime.time):
-                                latest_time_str = latest_time.strftime('%H:%M:%S')
-                            else:
-                                latest_time_str = str(latest_time)
-                                
-                            # logger.info(f"比较时间: {post_time_str} > {latest_time_str} = {post_time_str > latest_time_str}")
-                            if post_time_str > latest_time_str:
                                 latest_time = post_time
-                                logger.info(f"更新latest_time: {latest_time} ({type(latest_time).__name__})")
+                                logger.info(f"初始化latest_date: {latest_date}, latest_time: {latest_time}")
+                            else:
+                                # 将当前的latest_date和latest_time组合成datetime对象
+                                if isinstance(latest_date, datetime.date):
+                                    latest_date_str = latest_date.strftime('%Y-%m-%d')
+                                else:
+                                    latest_date_str = str(latest_date)
+                                    
+                                if isinstance(latest_time, datetime.time):
+                                    latest_time_str = latest_time.strftime('%H:%M:%S')
+                                else:
+                                    latest_time_str = str(latest_time)
+                                
+                                latest_datetime = datetime.datetime.strptime(f"{latest_date_str} {latest_time_str}", '%Y-%m-%d %H:%M:%S')
+                                
+                                # 比较完整的日期时间
+                                if current_datetime > latest_datetime:
+                                    latest_date = post_date
+                                    latest_time = post_time
+                                    logger.info(f"更新latest_date: {latest_date}, latest_time: {latest_time}")
+                        except Exception as e:
+                            logger.warning(f"日期时间比较失败: {e}, 使用当前帖子的日期时间")
+                            if latest_date is None:
+                                latest_date = post_date
+                            if latest_time is None:
+                                latest_time = post_time
                         
                         # 添加到批处理值
                         batch_values.append((
