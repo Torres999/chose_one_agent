@@ -481,33 +481,58 @@ class BaseNavigator:
             page_attempts += 1
             logger.info(f"尝试加载更多页面以继续爬取 (尝试 {page_attempts}/{max_page_attempts})")
             
-            if not self._load_more_posts():
+            # 记录加载前的容器数量
+            containers_before_load = self.page.query_selector_all(post_container_selector)
+            count_before_load = len(containers_before_load)
+            logger.info(f"加载前容器数量: {count_before_load}, 已处理数量: {previous_container_count}")
+            
+            if not self._load_more_posts(post_container_selector):
                 logger.info("无法加载更多页面，停止尝试")
                 break
-                
+            
+            # 等待一段时间，确保新内容已完全加载到DOM中
+            time.sleep(SCRAPER_CONSTANTS["page_load_wait"])
+            
             # 重新获取所有容器
             containers = self.page.query_selector_all(post_container_selector)
+            current_count = len(containers)
+            logger.info(f"加载后立即检查，容器数量: {current_count}")
             
-            if len(containers) <= previous_container_count:
-                logger.info(f"加载更多后未获取到新容器，停止尝试")
-                break
+            # 如果容器数量没有增加，等待更长时间后重试检查
+            if current_count <= previous_container_count:
+                logger.info(f"首次检查未发现新容器（{previous_container_count} -> {current_count}），等待更长时间后重试...")
+                time.sleep(SCRAPER_CONSTANTS["page_load_wait"] * 2)
                 
-            logger.info(f"加载更多后，容器总数从 {previous_container_count} 增加到 {len(containers)}")
-            
-            # 只处理新增的容器，避免重复处理
-            more_posts = self._scrape_posts(containers, previous_container_count, content_box_selector,
-                                          extract_post_info_func, cutoff_datetime, end_datetime,
-                                          processed_ids, results, section)
-            
-            # 更新已处理的容器数量
-            previous_container_count = len(containers)
-            
-            # 仅检查是否找到早于开始日期的帖子
-            for post in more_posts:
-                if post.get("is_before_cutoff", False):
-                    early_post_found = True
-                    logger.info("已找到早于开始日期的帖子，不再继续爬取")
+                # 再次检查容器数量
+                containers = self.page.query_selector_all(post_container_selector)
+                current_count = len(containers)
+                logger.info(f"延迟检查后，容器数量: {current_count}")
+                
+                if current_count <= previous_container_count:
+                    logger.info(f"延迟检查后仍未获取到新容器（{previous_container_count} -> {current_count}），停止尝试")
                     break
+            
+            # 如果容器数量增加了，继续处理
+            if current_count > previous_container_count:
+                logger.info(f"加载更多后，容器总数从 {previous_container_count} 增加到 {current_count}")
+                
+                # 只处理新增的容器，避免重复处理
+                more_posts = self._scrape_posts(containers, previous_container_count, content_box_selector,
+                                              extract_post_info_func, cutoff_datetime, end_datetime,
+                                              processed_ids, results, section)
+                
+                # 更新已处理的容器数量
+                previous_container_count = current_count
+                
+                # 仅检查是否找到早于开始日期的帖子
+                for post in more_posts:
+                    if post.get("is_before_cutoff", False):
+                        early_post_found = True
+                        logger.info("已找到早于开始日期的帖子，不再继续爬取")
+                        break
+            else:
+                logger.warning(f"容器数量异常：当前数量 {current_count} 未大于已处理数量 {previous_container_count}")
+                break
         
 
         logger.info(f"已经/最大尝试翻页次数 {page_attempts}/{max_page_attempts}")
@@ -739,8 +764,13 @@ class BaseNavigator:
             log_error(logger, "爬取帖子时出错", e, self.debug)
             return []
             
-    def _load_more_posts(self) -> bool:
-        """加载更多帖子"""
+    def _load_more_posts(self, post_container_selector: str = None) -> bool:
+        """
+        加载更多帖子
+        
+        Args:
+            post_container_selector: 帖子容器选择器，用于检测新内容是否加载
+        """
         try:
             # 导入加载更多按钮选择器
             try:
@@ -749,37 +779,153 @@ class BaseNavigator:
                 logger.info(f"使用加载更多按钮选择器: '{load_more_selector}'")
             except ImportError:
                 logger.warning("无法导入选择器配置，使用默认加载更多按钮选择器")
-                load_more_selector = "div.f-s-14.list-more-button.more-button"
+                load_more_selector = "div:has-text('加载更多')"
             
-            # 尝试点击"加载更多"按钮 - 增加多种尝试方法
-            # 第一种：使用配置选择器
-            more_button = self.page.query_selector(load_more_selector)
-            if more_button and more_button.is_visible():
-                logger.info("找到'加载更多'按钮，点击加载")
-                more_button.click()
-                time.sleep(SCRAPER_CONSTANTS["page_load_wait"] * 2)  # 增加等待时间
-                return True
+            # 如果没有传入容器选择器，尝试获取默认的
+            if not post_container_selector:
+                try:
+                    from chose_one_agent.modules.sections_config import get_selector
+                    post_container_selector = get_selector("post_items")
+                except ImportError:
+                    # 使用内容盒子选择器作为备选
+                    post_container_selector = ".clearfix.m-b-15.f-s-16.telegraph-content-box"
             
-            # 第二种：尝试使用文本内容查找
-            more_button_by_text = self.page.query_selector("div:has-text('加载更多')")
-            if more_button_by_text and more_button_by_text.is_visible():
-                logger.info("通过文本内容找到'加载更多'按钮，点击加载")
-                more_button_by_text.click()
-                time.sleep(SCRAPER_CONSTANTS["page_load_wait"] * 2)
-                return True
+            # 记录点击前的容器数量，用于后续验证
+            logger.info(f"_load_more_posts: 使用容器选择器: '{post_container_selector}'")
+            containers_before = self.page.query_selector_all(post_container_selector)
+            count_before = len(containers_before)
+            logger.info(f"点击前容器数量: {count_before} (使用选择器: '{post_container_selector}')")
+            
+            # 如果容器数量为0，尝试使用内容盒子选择器作为备选
+            if count_before == 0:
+                logger.warning(f"使用选择器 '{post_container_selector}' 未找到容器，尝试使用内容盒子选择器")
+                try:
+                    from chose_one_agent.modules.sections_config import get_selector
+                    content_box_selector = get_selector("post_content_box")
+                except ImportError:
+                    content_box_selector = ".clearfix.m-b-15.f-s-16.telegraph-content-box"
                 
-            # 第三种：使用XPath尝试查找
+                containers_before_alt = self.page.query_selector_all(content_box_selector)
+                count_before_alt = len(containers_before_alt)
+                if count_before_alt > 0:
+                    logger.info(f"使用内容盒子选择器 '{content_box_selector}' 找到 {count_before_alt} 个容器，切换使用此选择器")
+                    post_container_selector = content_box_selector
+                    count_before = count_before_alt
+                else:
+                    logger.warning(f"使用内容盒子选择器也未能找到容器")
+            
+            # 尝试点击"加载更多"按钮 - 基于实际HTML结构优化查找顺序
+            button_clicked = False
+            
+            # 第一种：使用精确的选择器（基于实际HTML：div.f-s-14.c-p包含"加载更多"）
             try:
-                more_button_xpath = self.page.query_selector("//div[contains(text(), '加载更多')]")
-                if more_button_xpath and more_button_xpath.is_visible():
-                    logger.info("通过XPath找到'加载更多'按钮，点击加载")
-                    more_button_xpath.click()
-                    time.sleep(SCRAPER_CONSTANTS["page_load_wait"] * 2)
-                    return True
+                # 优先查找有c-p类（cursor: pointer）的按钮，更精确
+                more_button_precise = self.page.query_selector("div.c-p:has-text('加载更多'), div.f-s-14.c-p:has-text('加载更多')")
+                if more_button_precise:
+                    # 检查是否可见
+                    try:
+                        if more_button_precise.is_visible():
+                            logger.info("通过精确选择器找到'加载更多'按钮（div.c-p），点击加载")
+                            more_button_precise.click()
+                            button_clicked = True
+                    except Exception as e:
+                        logger.debug(f"检查按钮可见性时出错: {e}")
             except Exception as e:
-                logger.warning(f"使用XPath查找按钮出错: {e}")
+                logger.debug(f"使用精确选择器查找按钮出错: {e}")
+            
+            # 第二种：使用配置选择器
+            if not button_clicked:
+                try:
+                    more_button = self.page.query_selector(load_more_selector)
+                    if more_button:
+                        try:
+                            if more_button.is_visible():
+                                logger.info("通过配置选择器找到'加载更多'按钮，点击加载")
+                                more_button.click()
+                                button_clicked = True
+                        except Exception as e:
+                            logger.debug(f"检查按钮可见性时出错: {e}")
+                except Exception as e:
+                    logger.debug(f"使用配置选择器查找按钮出错: {e}")
+            
+            # 第三种：尝试使用文本内容查找（最通用的方法）
+            if not button_clicked:
+                try:
+                    more_button_by_text = self.page.query_selector("div:has-text('加载更多')")
+                    if more_button_by_text:
+                        try:
+                            if more_button_by_text.is_visible():
+                                logger.info("通过文本内容找到'加载更多'按钮，点击加载")
+                                more_button_by_text.click()
+                                button_clicked = True
+                        except Exception as e:
+                            logger.debug(f"检查按钮可见性时出错: {e}")
+                except Exception as e:
+                    logger.debug(f"使用文本内容查找按钮出错: {e}")
+                    
+            # 第四种：使用XPath尝试查找
+            if not button_clicked:
+                try:
+                    more_button_xpath = self.page.query_selector("//div[contains(text(), '加载更多')]")
+                    if more_button_xpath:
+                        try:
+                            if more_button_xpath.is_visible():
+                                logger.info("通过XPath找到'加载更多'按钮，点击加载")
+                                more_button_xpath.click()
+                                button_clicked = True
+                        except Exception as e:
+                            logger.debug(f"检查按钮可见性时出错: {e}")
+                except Exception as e:
+                    logger.warning(f"使用XPath查找按钮出错: {e}")
+            
+            # 如果成功点击了按钮，等待内容加载
+            if button_clicked:
+                logger.info("已点击'加载更多'按钮，等待内容加载...")
                 
-            # 尝试滚动到页面底部触发加载
+                # 等待网络请求完成
+                try:
+                    self.page.wait_for_load_state("networkidle", timeout=10000)
+                    logger.info("网络请求已完成")
+                except Exception as e:
+                    logger.warning(f"等待网络请求完成超时: {e}")
+                
+                # 额外等待时间，确保DOM更新完成
+                time.sleep(SCRAPER_CONSTANTS["page_load_wait"] * 3)  # 增加到6秒
+                
+                # 尝试滚动到底部，触发可能的懒加载
+                try:
+                    self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    time.sleep(SCRAPER_CONSTANTS["page_load_wait"])
+                    # 再次等待网络请求
+                    try:
+                        self.page.wait_for_load_state("networkidle", timeout=5000)
+                    except:
+                        pass
+                except Exception as e:
+                    logger.warning(f"滚动到底部时出错: {e}")
+                
+                # 验证是否加载了新内容
+                containers_after = self.page.query_selector_all(post_container_selector)
+                count_after = len(containers_after)
+                logger.info(f"点击后容器数量: {count_after}")
+                
+                if count_after > count_before:
+                    logger.info(f"成功加载新内容，容器数量从 {count_before} 增加到 {count_after}")
+                    return True
+                else:
+                    logger.warning(f"点击后容器数量未增加（{count_before} -> {count_after}），可能内容还在加载中")
+                    # 再等待一段时间后重试检查
+                    time.sleep(SCRAPER_CONSTANTS["page_load_wait"] * 2)
+                    containers_final = self.page.query_selector_all(post_container_selector)
+                    count_final = len(containers_final)
+                    if count_final > count_before:
+                        logger.info(f"延迟检查发现新内容，容器数量从 {count_before} 增加到 {count_final}")
+                        return True
+                    else:
+                        logger.info("延迟检查后仍未发现新内容，可能已加载全部内容")
+                        return False
+                
+            # 如果未找到按钮，尝试滚动到页面底部触发加载
             logger.info("未找到'加载更多'按钮，尝试滚动加载")
             
             # 记录滚动前高度
@@ -793,12 +939,22 @@ class BaseNavigator:
             self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             time.sleep(SCRAPER_CONSTANTS["page_load_wait"] * 2)
             
+            # 等待网络请求完成
+            try:
+                self.page.wait_for_load_state("networkidle", timeout=5000)
+            except:
+                pass
+            
             # 额外尝试点击可能延迟加载的按钮
             more_button_delayed = self.page.query_selector(load_more_selector)
             if more_button_delayed and more_button_delayed.is_visible():
                 logger.info("滚动后找到'加载更多'按钮，点击加载")
                 more_button_delayed.click()
-                time.sleep(SCRAPER_CONSTANTS["page_load_wait"] * 2)
+                time.sleep(SCRAPER_CONSTANTS["page_load_wait"] * 3)
+                try:
+                    self.page.wait_for_load_state("networkidle", timeout=10000)
+                except:
+                    pass
                 return True
             
             # 检查是否滚动触发了加载

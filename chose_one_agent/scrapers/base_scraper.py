@@ -894,10 +894,25 @@ class BaseScraper:
                             # 对于每个头像，尝试获取其父元素的父元素作为评论项
                             parent_items = []
                             for avatar in avatars:
-                                # 获取父元素的父元素，因为通常结构是 avatar -> name/user container -> comment item
-                                container = avatar.evaluate("el => el.parentElement && el.parentElement.parentElement")
-                                if container:
-                                    parent_items.append(container)
+                                try:
+                                    # 获取父元素的父元素，因为通常结构是 avatar -> name/user container -> comment item
+                                    # 使用 evaluate_handle 获取 ElementHandle
+                                    container_handle = avatar.evaluate_handle("el => el.parentElement && el.parentElement.parentElement")
+                                    if container_handle:
+                                        container = container_handle.as_element()
+                                        if container:
+                                            parent_items.append(container)
+                                except Exception as e:
+                                    logger.debug(f"获取头像父容器时出错: {e}")
+                                    # 如果获取父元素的父元素失败，尝试只获取父元素
+                                    try:
+                                        parent_handle = avatar.evaluate_handle("el => el.parentElement")
+                                        if parent_handle:
+                                            parent = parent_handle.as_element()
+                                            if parent:
+                                                parent_items.append(parent)
+                                    except:
+                                        pass
                             
                             if parent_items:
                                 logger.info(f"从用户头像找到 {len(parent_items)} 条评论项")
@@ -1339,9 +1354,45 @@ class BaseScraper:
                         for avatar in avatar_elements:
                             try:
                                 # 查找用户名和评论内容
-                                parent = avatar.evaluate("node => node.parentElement")
+                                # 使用 evaluate_handle 获取父元素的 ElementHandle
+                                parent = None
+                                try:
+                                    parent_handle = avatar.evaluate_handle("node => node.parentElement")
+                                    if parent_handle:
+                                        parent = parent_handle.as_element()
+                                except Exception as e:
+                                    logger.debug(f"获取父元素失败: {e}")
+                                
+                                # 如果获取父元素失败，尝试向上查找包含评论的容器
+                                if not parent:
+                                    try:
+                                        # 查找最近的包含评论内容的父容器
+                                        parent_handle = avatar.evaluate_handle("""
+                                            node => {
+                                                let current = node.parentElement;
+                                                while (current && current !== document.body) {
+                                                    if (current.querySelector('.name, .content, .text') || 
+                                                        current.textContent.trim().length > 10) {
+                                                        return current;
+                                                    }
+                                                    current = current.parentElement;
+                                                }
+                                                return node.parentElement || node;
+                                            }
+                                        """)
+                                        if parent_handle:
+                                            parent = parent_handle.as_element()
+                                    except Exception as e:
+                                        logger.debug(f"向上查找父容器失败: {e}")
+                                
+                                # 如果仍然没有找到父元素，使用头像元素本身
                                 if not parent:
                                     parent = avatar
+                                    
+                                # 确保 parent 是 ElementHandle 类型
+                                if not hasattr(parent, 'query_selector'):
+                                    logger.warning(f"父元素不是有效的 ElementHandle，跳过此评论")
+                                    continue
                                     
                                 # 寻找用户名
                                 username_element = parent.query_selector("//span[contains(@class, 'name')] | //div[contains(@class, 'name')]")
@@ -1362,7 +1413,9 @@ class BaseScraper:
                                     })
                                     logger.debug(f"提取到用户 '{username}' 的评论: {comment_content[:30]}...")
                             except Exception as e:
-                                logger.debug(f"处理单个评论时出错: {str(e)}")
+                                logger.warning(f"提取评论时出错: {str(e)}")
+                                import traceback
+                                logger.debug(traceback.format_exc())
                         
                         break  # 如果成功找到一种方法，就不再尝试其他方法
                 
